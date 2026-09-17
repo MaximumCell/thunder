@@ -4,66 +4,58 @@ import { useState } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  CLARIFYING_QUESTIONS,
-  GENERATING_REPLIES,
-  MODELS,
-  QUICK_STARTS,
-  RATIOS,
-  type Ratio,
-} from "@/lib/mock-generations";
-
-type Stage = "idle" | "thinking" | "clarifying" | "sending";
+import { MODELS, QUICK_STARTS, RATIOS, type Ratio } from "@/lib/mock-generations";
+import type { AgentMessage, AgentResult } from "@/lib/agent";
 
 export function PromptStudio({
   onGenerate,
 }: {
   onGenerate: (prompt: string, ratio: Ratio) => void;
 }) {
-  const [prompt, setPrompt] = useState("");
+  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
+  const [input, setInput] = useState("");
   const [ratio, setRatio] = useState<Ratio>("16:9");
-  const [stage, setStage] = useState<Stage>("idle");
-  const [clarifyingQuestion, setClarifyingQuestion] = useState("");
-  const [clarifyingAnswer, setClarifyingAnswer] = useState("");
-  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const reset = () => {
-    setPrompt("");
-    setClarifyingAnswer("");
-    setClarifyingQuestion("");
-    setNote("");
-    setStage("idle");
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+
+    const next: AgentMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(next);
+    setInput("");
+    setBusy(true);
+
+    try {
+      const res = await fetch("/api/refine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next }),
+      });
+      const result: AgentResult = await res.json();
+      setMessages((m) => [...m, { role: "assistant", content: result.reply }]);
+      setFinalPrompt(result.status === "ready" ? result.finalPrompt : finalPrompt);
+    } catch {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: "Something went wrong — mind trying again?",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const submitPrompt = () => {
-    if (!prompt.trim() || stage !== "idle") return;
-    setStage("thinking");
-    setTimeout(() => {
-      setClarifyingQuestion(
-        CLARIFYING_QUESTIONS[
-          Math.floor(Math.random() * CLARIFYING_QUESTIONS.length)
-        ]
-      );
-      setStage("clarifying");
-    }, 700);
+  const generate = () => {
+    if (!finalPrompt) return;
+    onGenerate(finalPrompt, ratio);
+    setMessages([]);
+    setFinalPrompt(null);
+    setInput("");
   };
-
-  const submitClarification = () => {
-    if (!clarifyingAnswer.trim()) return;
-    setStage("thinking");
-    setTimeout(() => {
-      setNote(
-        GENERATING_REPLIES[
-          Math.floor(Math.random() * GENERATING_REPLIES.length)
-        ]
-      );
-      onGenerate(`${prompt} — ${clarifyingAnswer}`, ratio);
-      setStage("sending");
-      setTimeout(reset, 1600);
-    }, 700);
-  };
-
-  const busy = stage !== "idle";
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 pt-16 pb-10 text-center">
@@ -72,55 +64,77 @@ export function PromptStudio({
       </h1>
 
       <div className="mt-8 rounded-2xl border border-border bg-card p-4 text-left">
-        <Textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Describe the video you want to make..."
-          rows={2}
-          disabled={busy}
-          className="resize-none border-0 bg-transparent p-0 text-base shadow-none focus-visible:ring-0"
-        />
-
-        {busy && (
-          <div className="mt-3 space-y-2 border-t border-border pt-3">
-            {clarifyingQuestion && (
-              <p className="text-sm text-muted-foreground">
-                {clarifyingQuestion}
-              </p>
-            )}
-            {stage === "clarifying" ? (
-              <div className="flex gap-2">
-                <Textarea
-                  value={clarifyingAnswer}
-                  onChange={(e) => setClarifyingAnswer(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      submitClarification();
-                    }
-                  }}
-                  placeholder="Answer..."
-                  rows={1}
-                  className="min-h-9 flex-1 resize-none bg-transparent"
-                  autoFocus
-                />
-                <Button
-                  size="sm"
-                  className="rounded-full"
-                  onClick={submitClarification}
-                  disabled={!clarifyingAnswer.trim()}
+        {messages.length > 0 && (
+          <div className="mb-3 max-h-72 space-y-2 overflow-y-auto border-b border-border pb-3">
+            {messages.map((m, i) => (
+              <div
+                key={i}
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <p
+                  className={`max-w-[85%] rounded-lg px-3 py-1.5 text-sm ${
+                    m.role === "user"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-foreground"
+                  }`}
                 >
-                  <Send className="size-3.5" />
-                </Button>
+                  {m.content}
+                </p>
               </div>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span className="size-1.5 animate-pulse rounded-full bg-foreground" />
-                {note || "Thinking…"}
+            ))}
+            {busy && (
+              <div className="flex items-center gap-1.5 px-1">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="size-1.5 animate-bounce rounded-full bg-muted-foreground"
+                    style={{ animationDelay: `${i * 120}ms` }}
+                  />
+                ))}
               </div>
             )}
           </div>
         )}
+
+        {finalPrompt && (
+          <div className="mb-3 flex items-start justify-between gap-3 rounded-lg bg-secondary px-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              Ready — refine further or generate.
+            </p>
+            <Button size="sm" className="shrink-0 rounded-full" onClick={generate}>
+              Generate video
+            </Button>
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={
+              finalPrompt
+                ? "Ask for a change, or click Generate…"
+                : "Describe the video you want to make..."
+            }
+            rows={2}
+            disabled={busy}
+            className="resize-none border-0 bg-transparent p-0 text-base shadow-none focus-visible:ring-0"
+          />
+          <Button
+            size="sm"
+            className="shrink-0 rounded-full"
+            onClick={send}
+            disabled={!input.trim() || busy}
+          >
+            <Send className="size-3.5" />
+          </Button>
+        </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -136,8 +150,7 @@ export function PromptStudio({
                   key={r}
                   type="button"
                   onClick={() => setRatio(r)}
-                  disabled={busy}
-                  className={`rounded-full px-3 py-1 text-xs transition-colors disabled:opacity-40 ${
+                  className={`rounded-full px-3 py-1 text-xs transition-colors ${
                     ratio === r
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:text-foreground"
@@ -148,14 +161,6 @@ export function PromptStudio({
               ))}
             </div>
           </div>
-          <Button
-            size="sm"
-            className="rounded-full px-4"
-            onClick={submitPrompt}
-            disabled={!prompt.trim() || busy}
-          >
-            Generate
-          </Button>
         </div>
       </div>
 
@@ -164,7 +169,7 @@ export function PromptStudio({
           <button
             key={q.label}
             type="button"
-            onClick={() => setPrompt(q.prompt)}
+            onClick={() => setInput(q.prompt)}
             disabled={busy}
             className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-white/25 hover:text-foreground disabled:opacity-40"
           >

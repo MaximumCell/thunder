@@ -47,18 +47,6 @@ export const QUICK_STARTS = [
   { label: "Character intro", prompt: "A close-up character introduction shot, dramatic rim lighting, slow push-in" },
 ];
 
-export const CLARIFYING_QUESTIONS = [
-  "Got it. What's the setting or mood — bright and energetic, or something quieter?",
-  "Nice. Any specific camera angle or shot style you're picturing?",
-  "Understood. Who or what should be the main focus in frame?",
-];
-
-export const GENERATING_REPLIES = [
-  "That's a strong prompt. Sending it to Seedance now.",
-  "Locked in. Generating your video now.",
-  "Prompt looks solid — starting the render.",
-];
-
 let nextId = 1;
 export function makeId(prefix: string) {
   return `${prefix}-${nextId++}`;
