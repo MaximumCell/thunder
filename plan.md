@@ -4,7 +4,7 @@
 
 A conversational AI platform for generating videos (and images) from a free-form prompt — not limited to ad creatives, any video the user describes — built as a sponsored deliverable for a BytePlus (Seedance/Seedream) promo. Demonstrates real API integration — task submission, async polling, result retrieval, usage tracking — wrapped in a legitimate product experience, not a bare API demo script.
 
-**This is NOT a full Higgsfield-style SaaS clone.** No canvas/node editor. Scope is intentionally kept lean: a conversational chat interface for generation + a results gallery.
+**UI direction (revised after Step 3):** each chat is its own project, opened as its own page — a left-side chat rail (the conversational agent) next to a main-area infinite canvas where every generation (prompt, image, video) appears as a node, connected to the node it came from, so the history of a creative thread is visible and spatial rather than a flat list. This supersedes the original "chat + flat gallery, no canvas" scope — see Key Product Decisions.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ User → Next.js App (chat UI, shadcn components)
 - **Scope of generation**: General-purpose — any video from a text prompt, not an ad-only tool. Ads are one use case among many, not the product's ceiling.
 - **Gemini visibility**: Backend only. BytePlus stays the hero of the product and the video — Gemini just powers the assistant quietly.
 - **Generation scope**: Both video (Seedance 2.5) and image (Seedream) — built step by step, video first.
-- **No canvas/node editor.** Chat + gallery only.
+- **Project canvas UI** (revised — was "no canvas/node editor, chat + gallery only"): starting a chat opens its own project page. Left rail is the conversational agent; main area is an infinite pan/zoom canvas where each generation (prompt, image, video) is a node connected to the node it came from — visible, spatial history of a creative thread, not a flat gallery list. Reverses the original locked decision; see Step 4a below for the build plan and effort tradeoffs (new dependency, new routing, new data model for node lineage).
 - **Auth**: Real signed-up accounts via Supabase Auth (not anonymous/session-only) — history persists across visits.
 - **DB choice**: Supabase (Postgres) over Mongo — the data is inherently relational (users → conversations → messages → generation_tasks → usage_logs), and Supabase gives Auth + RLS + realtime out of the box.
 - **Asset storage**: Cloudinary — BytePlus's returned media URLs are likely temporary, so results must be re-hosted for a persistent gallery.
@@ -78,7 +78,15 @@ This is the persistent memory across Claude Code sessions — treat it as requir
 - Conversation state handled client-side/in-memory at this stage (DB comes in Step 5)
 - Gemini output/role stays invisible in the UI — user just sees "the assistant"
 
-### Step 4 — BytePlus Seedance Integration (video)
+### Step 4a — Project Canvas UI (revised scope, replaces "chat + flat gallery")
+- New route per project: starting a chat from the studio home creates a project and navigates to `/app/[projectId]`.
+- Left rail: the conversational agent (the same Step 3 flow, moved from the studio-home card into a persistent per-project panel).
+- Main area: infinite pan/zoom canvas. Each generation is a node (prompt text, image, or video), connected by an edge to the node/message it was generated from.
+- Needs a canvas/graph library — plan to use `reactflow` rather than hand-rolling drag/pan/zoom/edge-routing (that part is not a "ponytail it" case, it's genuinely complex interaction code with known solved libraries).
+- Node data model: still client-side/in-memory at this stage, consistent with Step 2/3 — persistence to Supabase comes in Step 5.
+- Still no live BytePlus calls in this step — nodes populate from the existing mock generation lifecycle until Step 4b.
+
+### Step 4b — BytePlus Seedance Integration (video)
 - API route: submit video generation task to Seedance 2.5 using the Gemini-refined prompt
 - API route: poll/retrieve task status and result
 - Milestone: full end-to-end video generation works (brief → refined prompt → generated video)
@@ -110,4 +118,4 @@ This is the persistent memory across Claude Code sessions — treat it as requir
 - Read `PROGRESS.md` at the start of every session. Update it at the end of every session, even if a step is only partially done.
 - Keep API keys server-side only (Next.js API routes / route handlers) — never expose Gemini, BytePlus, Supabase service role, or Cloudinary keys client-side.
 - Use shadcn components for UI — avoid default/generic-looking Tailwind UI.
-- Confirm BytePlus request/response shapes (params, auth headers, task polling interval, error codes) against the live ModelArk docs before finalizing Step 4 and Step 8 — API details may shift.
+- Confirm BytePlus request/response shapes (params, auth headers, task polling interval, error codes) against the live ModelArk docs before finalizing Step 4b and Step 8 — API details may shift.
