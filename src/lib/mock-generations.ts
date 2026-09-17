@@ -52,16 +52,6 @@ export function makeId(prefix: string) {
   return `${prefix}-${nextId++}`;
 }
 
-/** A few pre-completed entries so the grid isn't empty on first load. */
-export function seedGenerations(): Generation[] {
-  return [
-    { id: makeId("gen"), prompt: "Studio portrait, dramatic side light", status: "completed", progress: 100, ratio: "1:1", videoSrc: "/videos/6.mp4" },
-    { id: makeId("gen"), prompt: "Product macro shot, slow rotation", status: "completed", progress: 100, ratio: "1:1", videoSrc: "/videos/7.mp4" },
-    { id: makeId("gen"), prompt: "City street at night, neon reflections", status: "completed", progress: 100, ratio: "16:9", videoSrc: "/videos/3.mp4" },
-    { id: makeId("gen"), prompt: "Close-up character intro, rim light", status: "completed", progress: 100, ratio: "9:16", videoSrc: "/videos/4.mp4" },
-  ];
-}
-
 /** Drives a mock generation through queued → generating → completed/error via
  * setTimeout steps, standing in for real async polling until Step 4 wires up
  * the actual BytePlus task API. */
