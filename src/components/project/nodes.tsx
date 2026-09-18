@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import { Check, Copy, Download, Link2, Maximize2, Send, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { GenerationStatus } from "@/lib/mock-generations";
+import { insertUsageLog } from "@/lib/db";
+import { MODEL as CONTINUE_MODEL } from "@/lib/agent";
 import { VideoLightbox } from "./video-lightbox";
 
 function NodeShell({
@@ -71,6 +73,29 @@ export function PromptNode({
   );
 }
 
+// Flavor text only, not a claim of real progress — BytePlus's task status
+// has no progress field (confirmed earlier), so this never implies a
+// percentage. Just something more alive than a static "Generating…".
+const GENERATING_MESSAGES = [
+  "Sending your prompt to Seedance…",
+  "Rendering frames…",
+  "Adding motion and lighting…",
+  "Fine-tuning the shot…",
+  "Almost there…",
+];
+
+function useElapsedSeconds(active: boolean, startedAt?: number) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!active || !startedAt) return;
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [active, startedAt]);
+  return elapsed;
+}
+
 function downloadVideo(src: string) {
   fetch(src)
     .then((res) => res.blob())
@@ -92,9 +117,12 @@ export function VideoNode({
   videoSrc?: string;
   prompt: string;
   onRetry?: () => void;
+  startedAt?: number;
 }>) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const elapsed = useElapsedSeconds(data.status === "generating", data.startedAt);
+  const message = GENERATING_MESSAGES[Math.floor(elapsed / 6) % GENERATING_MESSAGES.length];
 
   const copyLink = () => {
     if (!data.videoSrc) return;
@@ -158,11 +186,21 @@ export function VideoNode({
           </>
         )}
         {(data.status === "queued" || data.status === "generating") && (
-          <div className="flex size-full flex-col items-center justify-center gap-2">
+          <div className="flex size-full flex-col items-center justify-center gap-2 px-3 text-center">
             <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             <p className="text-[10px] text-muted-foreground">
-              {data.status === "queued" ? "Queued…" : "Generating…"}
+              {data.status === "queued" ? "Queued…" : message}
             </p>
+            {data.status === "generating" && elapsed > 0 && (
+              <p className="text-[9px] text-muted-foreground/60">
+                {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")} elapsed
+              </p>
+            )}
+            {data.status === "generating" && (
+              <div className="mt-1 h-0.5 w-20 overflow-hidden rounded-full bg-white/10">
+                <div className="indeterminate-bar h-full w-2/5 rounded-full bg-white/50" />
+              </div>
+            )}
           </div>
         )}
         {data.status === "error" && (
@@ -196,6 +234,7 @@ export function VideoNode({
 export function DraftNode({
   data,
 }: NodeProps<{
+  conversationId: string;
   initialPrompt?: string;
   onSubmit: (type: "video" | "image" | "prompt", prompt: string) => void;
   onCancel: () => void;
@@ -229,6 +268,12 @@ export function DraftNode({
         setError(result.error ?? "Something went wrong — mind trying again?");
         return;
       }
+      insertUsageLog({
+        conversationId: data.conversationId,
+        source: "gemma",
+        model: CONTINUE_MODEL,
+        rawUsage: result.usage,
+      }).catch(() => {});
       data.onSubmit("prompt", result.prompt);
     } catch {
       setError("Something went wrong — mind trying again?");

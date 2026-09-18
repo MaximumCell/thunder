@@ -6,8 +6,8 @@ import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RATIOS, type Ratio } from "@/lib/mock-generations";
-import { insertMessage } from "@/lib/db";
-import type { AgentMessage, AgentResult } from "@/lib/agent";
+import { insertMessage, insertUsageLog } from "@/lib/db";
+import { MODEL, type AgentMessage, type AgentResult } from "@/lib/agent";
 
 export function ChatRail({
   conversationId,
@@ -43,6 +43,12 @@ export function ChatRail({
       const result: AgentResult = await res.json();
       setMessages((m) => [...m, { role: "assistant", content: result.reply }]);
       insertMessage(conversationId, "assistant", result.reply).catch(() => {});
+      insertUsageLog({
+        conversationId,
+        source: "gemma",
+        model: MODEL,
+        rawUsage: result.usage,
+      }).catch(() => {});
       if (result.status === "ready" && result.finalPrompt) {
         setFinalPrompt(result.finalPrompt);
         onFinalPrompt(result.finalPrompt);

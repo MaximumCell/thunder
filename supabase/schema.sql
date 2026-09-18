@@ -120,11 +120,13 @@ create policy "generation_tasks: owner all" on public.generation_tasks
   );
 
 -- ── usage_logs ───────────────────────────────────────────────────────────
--- Structure only — Step 7 builds the actual tracking logic. Left empty.
+-- One row per Gemma chat turn or per completed BytePlus generation (Step 7).
 create table if not exists public.usage_logs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
+  conversation_id uuid references public.conversations (id) on delete cascade,
   generation_task_id uuid references public.generation_tasks (id) on delete set null,
+  source text not null default 'byteplus' check (source in ('gemma', 'byteplus')),
   model text,
   tokens integer,
   cost_usd numeric(10, 4),

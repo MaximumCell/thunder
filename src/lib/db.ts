@@ -230,25 +230,27 @@ export async function loadProfileName(): Promise<string | null> {
   return data?.name ?? null;
 }
 
-// BytePlus's task-status response includes a `usage` object of unconfirmed
-// shape (never live-verified — see PROGRESS.md). Pull out a token count if
-// one is present under a plausible key; otherwise just log the generation
-// itself (still real: a real BytePlus call happened, just no token figure).
+// BytePlus's task-status response and Gemini's usageMetadata are both of
+// not-fully-confirmed shape — pull out a token count if one is present
+// under a plausible key for either; otherwise just log the call itself
+// (still real: a real API call happened, just no token figure).
 function extractTokens(raw: unknown): number | null {
   if (raw && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
-    for (const key of ["total_tokens", "completion_tokens", "tokens"]) {
+    for (const key of ["totalTokenCount", "total_tokens", "completion_tokens", "tokens"]) {
       if (typeof obj[key] === "number") return obj[key] as number;
     }
   }
   return null;
 }
 
-export async function insertUsageLog(
-  generationTaskId: string,
-  model: string,
-  rawUsage: unknown
-) {
+export async function insertUsageLog(params: {
+  conversationId: string | null;
+  generationTaskId?: string | null;
+  source: "gemma" | "byteplus";
+  model: string;
+  rawUsage: unknown;
+}) {
   const supabase = createClient();
   const {
     data: { user },
@@ -256,25 +258,84 @@ export async function insertUsageLog(
   if (!user) return;
   const { error } = await supabase.from("usage_logs").insert({
     user_id: user.id,
-    generation_task_id: generationTaskId,
-    model,
-    tokens: extractTokens(rawUsage),
+    conversation_id: params.conversationId,
+    generation_task_id: params.generationTaskId ?? null,
+    source: params.source,
+    model: params.model,
+    tokens: extractTokens(params.rawUsage),
   });
   if (error) throw error;
 }
 
-export interface UsageSummary {
-  generations: number;
+export interface UsageSourceSummary {
+  count: number;
   tokens: number;
 }
 
+export interface UsageSummary {
+  byteplus: UsageSourceSummary;
+  gemma: UsageSourceSummary;
+}
+
+// RLS (usage_logs: owner all, auth.uid() = user_id) already scopes this to
+// the signed-in user's own rows — no explicit .eq("user_id", ...) needed,
+// same pattern as every other table read in this file.
 export async function loadUsageSummary(): Promise<UsageSummary> {
   const supabase = createClient();
-  const { data, error } = await supabase.from("usage_logs").select("tokens");
+  const { data, error } = await supabase.from("usage_logs").select("source, tokens");
   if (error) throw error;
   const rows = data ?? [];
-  return {
-    generations: rows.length,
-    tokens: rows.reduce((sum, r) => sum + (r.tokens ?? 0), 0),
+  const summarize = (source: "byteplus" | "gemma"): UsageSourceSummary => {
+    const matched = rows.filter((r) => r.source === source);
+    return {
+      count: matched.length,
+      tokens: matched.reduce((sum, r) => sum + (r.tokens ?? 0), 0),
+    };
   };
+  return { byteplus: summarize("byteplus"), gemma: summarize("gemma") };
+}
+
+export interface UsageLogEntry {
+  id: string;
+  source: "gemma" | "byteplus";
+  model: string | null;
+  tokens: number | null;
+  cost_usd: number | null;
+  created_at: string;
+  conversation_title: string | null;
+  generation_label: string | null;
+}
+
+export async function loadUsageDetail(limit = 50): Promise<UsageLogEntry[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("usage_logs")
+    .select(
+      "id, source, model, tokens, cost_usd, created_at, conversations(title), generation_tasks(label, prompt)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map((r) => {
+    const row = r as unknown as {
+      id: string;
+      source: "gemma" | "byteplus";
+      model: string | null;
+      tokens: number | null;
+      cost_usd: number | null;
+      created_at: string;
+      conversations: { title: string | null } | null;
+      generation_tasks: { label: string | null; prompt: string | null } | null;
+    };
+    return {
+      id: row.id,
+      source: row.source,
+      model: row.model,
+      tokens: row.tokens,
+      cost_usd: row.cost_usd,
+      created_at: row.created_at,
+      conversation_title: row.conversations?.title ?? null,
+      generation_label: row.generation_tasks?.label ?? row.generation_tasks?.prompt ?? null,
+    };
+  });
 }

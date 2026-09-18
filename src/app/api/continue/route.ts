@@ -16,5 +16,5 @@ export async function POST(request: Request) {
   if (!result.prompt) {
     return NextResponse.json({ error: result.error }, { status: 502 });
   }
-  return NextResponse.json({ prompt: result.prompt });
+  return NextResponse.json({ prompt: result.prompt, usage: result.usage });
 }

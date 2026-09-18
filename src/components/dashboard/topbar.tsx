@@ -5,13 +5,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FolderOpen, Home, LogOut, Zap } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { loadProfileName, loadUsageSummary } from "@/lib/db";
+import {
+  loadProfileName,
+  loadUsageDetail,
+  loadUsageSummary,
+  type UsageLogEntry,
+  type UsageSummary,
+} from "@/lib/db";
 
 export function Topbar() {
   const router = useRouter();
   const [name, setName] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
-  const [usage, setUsage] = useState<{ generations: number; tokens: number } | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [detail, setDetail] = useState<UsageLogEntry[] | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -21,6 +30,17 @@ export function Topbar() {
       .auth.getUser()
       .then(({ data }) => setEmail(data.user?.email ?? null));
   }, []);
+
+  const openUsage = () => {
+    setUsageOpen((v) => !v);
+    if (!detail && !detailLoading) {
+      setDetailLoading(true);
+      loadUsageDetail()
+        .then(setDetail)
+        .catch(() => setDetail([]))
+        .finally(() => setDetailLoading(false));
+    }
+  };
 
   const signOut = async () => {
     await createClient().auth.signOut();
@@ -44,17 +64,101 @@ export function Topbar() {
 
       <div className="flex items-center gap-2">
         {usage && (
-          <span
-            title={
-              usage.tokens > 0
-                ? `${usage.tokens} tokens logged across ${usage.generations} generation${usage.generations === 1 ? "" : "s"}`
-                : `${usage.generations} generation${usage.generations === 1 ? "" : "s"} logged`
-            }
-            className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground sm:flex"
-          >
-            <Zap className="size-3" />
-            {usage.tokens > 0 ? `${usage.tokens} tokens` : `${usage.generations} generations`}
-          </span>
+          <div className="relative hidden sm:block">
+            <button
+              type="button"
+              onClick={openUsage}
+              title="Usage breakdown"
+              className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-white/25 hover:text-foreground"
+            >
+              <Zap className="size-3" />
+              {usage.byteplus.tokens > 0
+                ? `${usage.byteplus.tokens} tokens`
+                : `${usage.byteplus.count} generation${usage.byteplus.count === 1 ? "" : "s"}`}
+            </button>
+
+            {usageOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setUsageOpen(false)} />
+                <div className="absolute top-11 right-0 z-20 w-96 rounded-xl border border-border bg-card shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+                  <div className="grid grid-cols-2 gap-2 border-b border-border p-3">
+                    <div className="rounded-lg bg-secondary/50 p-2.5">
+                      <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                        BytePlus
+                      </p>
+                      <p className="mt-0.5 text-sm font-medium">
+                        {usage.byteplus.count} generation{usage.byteplus.count === 1 ? "" : "s"}
+                      </p>
+                      {usage.byteplus.tokens > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          {usage.byteplus.tokens} tokens
+                        </p>
+                      )}
+                    </div>
+                    <div className="rounded-lg bg-secondary/50 p-2.5">
+                      <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+                        Gemma
+                      </p>
+                      <p className="mt-0.5 text-sm font-medium">
+                        {usage.gemma.count} call{usage.gemma.count === 1 ? "" : "s"}
+                      </p>
+                      {usage.gemma.tokens > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          {usage.gemma.tokens} tokens
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="max-h-72 overflow-y-auto thin-scrollbar">
+                    {detailLoading && (
+                      <p className="p-3 text-xs text-muted-foreground">Loading…</p>
+                    )}
+                    {detail?.length === 0 && (
+                      <p className="p-3 text-xs text-muted-foreground">
+                        No usage logged yet.
+                      </p>
+                    )}
+                    {detail?.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="flex items-start justify-between gap-3 border-b border-border px-3 py-2 last:border-0"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+                                entry.source === "byteplus"
+                                  ? "bg-foreground text-background"
+                                  : "bg-secondary text-muted-foreground"
+                              }`}
+                            >
+                              {entry.source}
+                            </span>
+                            <p className="truncate text-xs text-foreground/90">
+                              {entry.conversation_title || entry.generation_label || "Untitled"}
+                            </p>
+                          </div>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground">
+                            {entry.model ?? "unknown model"}
+                            {entry.tokens ? ` · ${entry.tokens} tokens` : ""}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {new Date(entry.created_at).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         <Link

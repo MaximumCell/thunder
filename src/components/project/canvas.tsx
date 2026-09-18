@@ -35,6 +35,7 @@ export interface AddNodeRequest {
 }
 
 function FlowCanvas({
+  conversationId,
   nodes,
   edges,
   onAddNode,
@@ -43,6 +44,7 @@ function FlowCanvas({
   onDisconnectEdge,
   onSelectNode,
 }: {
+  conversationId: string;
   nodes: Node[];
   edges: Edge[];
   onAddNode: (request: AddNodeRequest) => void;
@@ -221,6 +223,7 @@ function FlowCanvas({
           type: "draft",
           position: flowPosition,
           data: {
+            conversationId,
             initialPrompt,
             onSubmit: finalizeDraft(flowPosition),
             onCancel: cleanupDraft,
@@ -237,7 +240,15 @@ function FlowCanvas({
         },
       ]);
     },
-    [screenToFlowPosition, rfNodes, setRfNodes, setRfEdges, finalizeDraft, cleanupDraft]
+    [
+      screenToFlowPosition,
+      rfNodes,
+      setRfNodes,
+      setRfEdges,
+      finalizeDraft,
+      cleanupDraft,
+      conversationId,
+    ]
   );
 
   return (
@@ -278,6 +289,7 @@ function FlowCanvas({
 }
 
 export function Canvas(props: {
+  conversationId: string;
   nodes: Node[];
   edges: Edge[];
   onAddNode: (request: AddNodeRequest) => void;

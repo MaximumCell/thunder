@@ -244,7 +244,7 @@ export default function ProjectPage() {
       updateNodeData(nodeId, { status: "error" });
       return;
     }
-    updateNodeData(nodeId, { status: "generating" });
+    updateNodeData(nodeId, { status: "generating", startedAt: Date.now() });
     pollVideoTask(submitData.taskId, nodeId);
   };
 
@@ -328,7 +328,13 @@ export default function ProjectPage() {
           videoSrc: data.videoUrl,
           byteplusUrl: data.byteplusUrl,
         });
-        insertUsageLog(nodeId, data.model ?? "unknown", data.usage).catch(() => {});
+        insertUsageLog({
+          conversationId,
+          generationTaskId: nodeId,
+          source: "byteplus",
+          model: data.model ?? "unknown",
+          rawUsage: data.usage,
+        }).catch(() => {});
       } else if (data?.status === "error") {
         updateNodeData(nodeId, { status: "error" });
       } else {
@@ -356,6 +362,7 @@ export default function ProjectPage() {
         onGenerateRequest={handleGenerate}
       />
       <Canvas
+        conversationId={conversationId}
         nodes={nodes}
         edges={edges}
         onAddNode={handleAddNode}
