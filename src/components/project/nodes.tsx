@@ -309,11 +309,10 @@ export function DraftNode({
           </button>
           <button
             type="button"
-            disabled
-            className="cursor-not-allowed rounded-lg px-3 py-2 text-left text-sm text-muted-foreground/50"
+            onClick={() => setType("image")}
+            className="rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary"
           >
             Image generation
-            <span className="ml-1.5 text-[10px]">Soon</span>
           </button>
           <button
             type="button"
@@ -363,7 +362,7 @@ export function DraftNode({
       ) : (
         <div className="flex flex-col gap-2">
           <p className="px-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-            Video prompt
+            {type === "image" ? "Image prompt" : "Video prompt"}
           </p>
           <div className="flex items-end gap-2">
             <Textarea
@@ -376,7 +375,7 @@ export function DraftNode({
                   submit();
                 }
               }}
-              placeholder="Describe this video..."
+              placeholder={type === "image" ? "Describe this image..." : "Describe this video..."}
               rows={2}
               className="nowheel thin-scrollbar max-h-40 resize-none overflow-y-auto bg-transparent text-sm"
             />
@@ -395,25 +394,124 @@ export function DraftNode({
   );
 }
 
-// Not reachable yet (Seedream is "Coming soon" — see mock-generations.ts
-// MODELS), but built now alongside the other two node types since the
-// canvas node-type set is fixed for this step.
+const IMAGE_GENERATING_MESSAGES = [
+  "Sending your prompt to Seedream…",
+  "Composing the image…",
+  "Refining details…",
+  "Almost there…",
+];
+
+function downloadImage(src: string) {
+  fetch(src)
+    .then((res) => res.blob())
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "thunder-image.png";
+      a.click();
+      URL.revokeObjectURL(url);
+    })
+    .catch(() => window.open(src, "_blank"));
+}
+
 export function ImageNode({
   data,
-}: NodeProps<{ src?: string; prompt: string }>) {
+}: NodeProps<{
+  status: GenerationStatus;
+  src?: string;
+  prompt: string;
+  onRetry?: () => void;
+  startedAt?: number;
+}>) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const elapsed = useElapsedSeconds(data.status === "generating", data.startedAt);
+  const message = IMAGE_GENERATING_MESSAGES[Math.floor(elapsed / 4) % IMAGE_GENERATING_MESSAGES.length];
+
+  const copyLink = () => {
+    if (!data.src) return;
+    navigator.clipboard.writeText(data.src).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   return (
     <NodeShell className="w-56 overflow-hidden p-0">
-      <div className="relative aspect-square w-full bg-black">
-        {data.src ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            className="size-full object-cover"
-            src={data.src}
-            alt={data.prompt}
-          />
-        ) : (
-          <div className="flex size-full items-center justify-center text-[10px] text-muted-foreground">
-            Image
+      <div className="group relative aspect-square w-full bg-black">
+        {data.status === "completed" && data.src && (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="size-full object-cover" src={data.src} alt={data.prompt} />
+            <div className="nodrag absolute inset-x-0 bottom-0 flex justify-end gap-1 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                type="button"
+                title="Full view"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(true);
+                }}
+                className="flex size-6 items-center justify-center rounded-md bg-black/60 text-white transition-colors hover:bg-black/80"
+              >
+                <Maximize2 className="size-3" />
+              </button>
+              <button
+                type="button"
+                title="Copy link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyLink();
+                }}
+                className="flex size-6 items-center justify-center rounded-md bg-black/60 text-white transition-colors hover:bg-black/80"
+              >
+                {copied ? <Check className="size-3" /> : <Link2 className="size-3" />}
+              </button>
+              <button
+                type="button"
+                title="Download"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  downloadImage(data.src!);
+                }}
+                className="flex size-6 items-center justify-center rounded-md bg-black/60 text-white transition-colors hover:bg-black/80"
+              >
+                <Download className="size-3" />
+              </button>
+            </div>
+            {expanded && (
+              <VideoLightbox src={data.src} kind="image" onClose={() => setExpanded(false)} />
+            )}
+          </>
+        )}
+        {(data.status === "queued" || data.status === "generating") && (
+          <div className="flex size-full flex-col items-center justify-center gap-2 px-3 text-center">
+            <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+            <p className="text-[10px] text-muted-foreground">
+              {data.status === "queued" ? "Queued…" : message}
+            </p>
+            {data.status === "generating" && (
+              <div className="mt-1 h-0.5 w-20 overflow-hidden rounded-full bg-white/10">
+                <div className="indeterminate-bar h-full w-2/5 rounded-full bg-white/50" />
+              </div>
+            )}
+          </div>
+        )}
+        {data.status === "error" && (
+          <div className="flex size-full flex-col items-center justify-center gap-1.5">
+            <p className="text-[10px] text-destructive">Failed</p>
+            {data.onRetry && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  data.onRetry?.();
+                }}
+                className="nodrag rounded-full bg-secondary px-2.5 py-1 text-[10px] font-medium text-foreground transition-colors hover:bg-secondary/70"
+              >
+                Retry
+              </button>
+            )}
           </div>
         )}
       </div>

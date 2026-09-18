@@ -3,10 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Topbar } from "@/components/dashboard/topbar";
-import { listConversations, loadProjectPreview, type ConversationRow } from "@/lib/db";
+import {
+  listConversations,
+  loadProjectPreview,
+  type ConversationRow,
+  type ProjectPreview,
+} from "@/lib/db";
 
 interface ProjectCard extends ConversationRow {
-  preview: string | null;
+  preview: ProjectPreview | null;
 }
 
 // Sample cards to preview the grid layout while your real project history is
@@ -61,15 +66,22 @@ export default function ProjectsPage() {
                   className="group overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-white/25"
                 >
                   <div className="relative aspect-video w-full overflow-hidden bg-secondary">
-                    {p.preview ? (
+                    {p.preview?.type === "video" ? (
                       <video
                         className="size-full object-cover"
-                        src={p.preview}
+                        src={p.preview.url}
                         autoPlay
                         muted
                         loop
                         playsInline
                         preload="auto"
+                      />
+                    ) : p.preview?.type === "image" ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        className="size-full object-cover"
+                        src={p.preview.url}
+                        alt={p.title || "Project preview"}
                       />
                     ) : (
                       <div className="flex size-full items-center justify-center">

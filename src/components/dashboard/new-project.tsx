@@ -11,19 +11,33 @@ import {
   createConversation,
   insertGenerationTask,
   insertMessage,
+  insertUsageLog,
   listConversations,
+  loadProjectPreview,
+  updateGenerationTask,
   type ConversationRow,
+  type ProjectPreview,
 } from "@/lib/db";
+
+interface ProjectWithPreview extends ConversationRow {
+  preview: ProjectPreview | null;
+}
 
 export function NewProject() {
   const router = useRouter();
   const [input, setInput] = useState("");
+  const [mode, setMode] = useState<"video" | "image">("video");
   const [starting, setStarting] = useState(false);
-  const [projects, setProjects] = useState<ConversationRow[] | null>(null);
+  const [projects, setProjects] = useState<ProjectWithPreview[] | null>(null);
 
   useEffect(() => {
     listConversations()
-      .then(setProjects)
+      .then(async (rows) => {
+        const previews = await Promise.all(
+          rows.map((r) => loadProjectPreview(r.id).catch(() => null))
+        );
+        setProjects(rows.map((r, i) => ({ ...r, preview: previews[i] })));
+      })
       .catch(() => setProjects([]));
   }, []);
 
@@ -35,15 +49,52 @@ export function NewProject() {
     try {
       const id = await createConversation(text);
       await insertMessage(id, "user", text);
-      await insertGenerationTask(id, {
-        id: crypto.randomUUID(),
-        parentId: null,
-        type: "prompt",
-        status: "completed",
-        label: "Brief",
-        prompt: text,
-        position: { x: 0, y: 120 },
-      });
+
+      if (mode === "image") {
+        // No chat refinement for images yet (same as the canvas node path)
+        // — direct prompt straight to Seedream. Awaited here, before
+        // navigating, so the project page's generic on-load fetch always
+        // sees a finished (completed/error) row, never a stale "generating"
+        // one it has no live connection back to.
+        const imgId = crypto.randomUUID();
+        await insertGenerationTask(id, {
+          id: imgId,
+          parentId: null,
+          type: "image",
+          status: "generating",
+          prompt: text,
+          position: { x: 0, y: 120 },
+        });
+        const res = await fetch("/api/generate-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: text }),
+        }).catch(() => null);
+        const data = await res?.json().catch(() => null);
+        if (data?.imageUrl) {
+          await updateGenerationTask(imgId, { status: "completed", media_url: data.imageUrl });
+          insertUsageLog({
+            conversationId: id,
+            generationTaskId: imgId,
+            source: "byteplus",
+            model: data.model ?? "unknown",
+            rawUsage: data.usage,
+          }).catch(() => {});
+        } else {
+          await updateGenerationTask(imgId, { status: "error" });
+        }
+      } else {
+        await insertGenerationTask(id, {
+          id: crypto.randomUUID(),
+          parentId: null,
+          type: "prompt",
+          status: "completed",
+          label: "Brief",
+          prompt: text,
+          position: { x: 0, y: 120 },
+        });
+      }
+
       router.push(`/app/${id}`);
     } catch {
       setStarting(false);
@@ -67,7 +118,11 @@ export function NewProject() {
                 start();
               }
             }}
-            placeholder="Describe the video you want to make..."
+            placeholder={
+              mode === "image"
+                ? "Describe the image you want to make..."
+                : "Describe the video you want to make..."
+            }
             rows={2}
             disabled={starting}
             className="resize-none border-0 bg-transparent p-0 text-base shadow-none focus-visible:ring-0"
@@ -78,17 +133,39 @@ export function NewProject() {
             onClick={start}
             disabled={!input.trim() || starting}
           >
-            <Send className="size-3.5" />
+            {starting ? (
+              <span className="size-3.5 animate-spin rounded-full border-2 border-background/40 border-t-background" />
+            ) : (
+              <Send className="size-3.5" />
+            )}
           </Button>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-border pt-4">
-          <span className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background">
+          <button
+            type="button"
+            onClick={() => setMode("video")}
+            disabled={starting}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              mode === "video"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
             Video
-          </span>
-          <span className="rounded-full px-3 py-1 text-xs text-muted-foreground/50">
-            Image · Soon
-          </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("image")}
+            disabled={starting}
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              mode === "image"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Image
+          </button>
         </div>
       </div>
 
@@ -142,25 +219,50 @@ export function NewProject() {
       {projects && projects.length > 0 && (
         <div className="mt-14 text-left">
           <p className="mb-3 text-sm text-muted-foreground">Your projects</p>
-          <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             {projects.map((p) => (
               <Link
                 key={p.id}
                 href={`/app/${p.id}`}
-                className="flex items-center gap-3 rounded-xl border border-border px-4 py-3 transition-colors hover:border-white/25"
+                className="group overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-white/25"
               >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs font-semibold">
-                  {(p.title || "?")[0].toUpperCase()}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  {p.title || "Untitled"}
-                </span>
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {new Date(p.created_at).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
+                <div className="relative aspect-video w-full overflow-hidden bg-secondary">
+                  {p.preview?.type === "video" ? (
+                    <video
+                      className="size-full object-cover"
+                      src={p.preview.url}
+                      autoPlay
+                      muted
+                      loop
+                      playsInline
+                      preload="auto"
+                    />
+                  ) : p.preview?.type === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      className="size-full object-cover"
+                      src={p.preview.url}
+                      alt={p.title || "Project preview"}
+                    />
+                  ) : (
+                    <div className="flex size-full items-center justify-center">
+                      <span className="flex size-10 items-center justify-center rounded-lg bg-foreground/10 text-sm font-semibold text-muted-foreground">
+                        {(p.title || "?")[0].toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="p-3">
+                  <p className="line-clamp-1 text-sm font-medium">
+                    {p.title || "Untitled"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {new Date(p.created_at).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </p>
+                </div>
               </Link>
             ))}
           </div>

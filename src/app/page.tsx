@@ -41,6 +41,33 @@ const STEPS = [
   },
 ];
 
+const FOOTER_COLUMNS = [
+  {
+    title: "Product",
+    links: [
+      { label: "How it works", href: "#how-it-works" },
+      { label: "Start generating", href: "/app" },
+      { label: "Pricing", href: "#" },
+    ],
+  },
+  {
+    title: "Company",
+    links: [
+      { label: "About", href: "#" },
+      { label: "Blog", href: "#" },
+      { label: "Contact", href: "mailto:hello@thunder.app" },
+    ],
+  },
+  {
+    title: "Resources",
+    links: [
+      { label: "Documentation", href: "#" },
+      { label: "BytePlus ModelArk", href: "https://www.byteplus.com/en/product/modelark" },
+      { label: "Status", href: "#" },
+    ],
+  },
+];
+
 export default function Home() {
   return (
     <div className="flex min-h-full flex-col bg-background text-foreground">
@@ -174,10 +201,20 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="border-t border-border">
-          <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 py-20 text-center sm:px-6">
+        <section className="relative flex min-h-[85vh] items-center overflow-hidden border-t border-border bg-black">
+          <video
+            className="absolute inset-0 size-full object-cover"
+            src="/videos/8.mp4"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+          />
+          <div className="absolute inset-0 bg-black/60" />
+          <div className="relative mx-auto flex w-full max-w-6xl flex-col items-center gap-6 px-6 text-center sm:px-6">
             <Reveal className="flex flex-col items-center gap-6">
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+              <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 Your next video is one conversation away.
               </h2>
               <Button
@@ -194,9 +231,41 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-border">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-8 text-sm text-muted-foreground sm:px-6">
-          <span>Thunder</span>
-          <span>Built on BytePlus ModelArk</span>
+        <div className="mx-auto w-full max-w-6xl px-6 py-14 sm:px-6">
+          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="lg:col-span-2">
+              <span className="text-base font-medium tracking-tight text-foreground">
+                Thunder
+              </span>
+              <p className="mt-3 max-w-xs text-sm text-muted-foreground">
+                Describe any video. The assistant sharpens the prompt, BytePlus Seedance
+                renders it.
+              </p>
+            </div>
+
+            {FOOTER_COLUMNS.map((col) => (
+              <div key={col.title}>
+                <p className="text-sm font-medium text-foreground">{col.title}</p>
+                <ul className="mt-3 space-y-2.5">
+                  {col.links.map((link) => (
+                    <li key={link.label}>
+                      <Link
+                        href={link.href}
+                        className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {link.label}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-12 flex flex-col gap-3 border-t border-border pt-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>© 2026 Thunder. All rights reserved.</span>
+            <span>Built on BytePlus ModelArk</span>
+          </div>
         </div>
       </footer>
     </div>

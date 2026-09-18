@@ -1,8 +1,10 @@
-// BytePlus ModelArk — Dreamina Seedance 2.5 video generation (Step 4b).
-// Confirmed against the live ModelArk console + docs (ap-southeast-1
-// region), not assumed from memory. See PROGRESS.md for the research notes.
+// BytePlus ModelArk — Dreamina Seedance 2.5 video generation (Step 4b) and
+// ByteDance-Seedream-4.5 image generation (Step 8). Confirmed against the
+// live ModelArk console + docs (ap-southeast-1 region), not assumed from
+// memory. See PROGRESS.md for the research notes.
 const BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3";
 export const VIDEO_MODEL = "dreamina-seedance-2-5-260628";
+export const IMAGE_MODEL = "seedream-4-5-251128";
 
 export interface SubmitVideoResult {
   taskId: string | null;
@@ -137,5 +139,61 @@ export async function getVideoTask(taskId: string): Promise<VideoTaskResult> {
     return { status: "generating", videoUrl: null, error: null };
   } catch {
     return { status: "generating", videoUrl: null, error: null };
+  }
+}
+
+export interface ImageResult {
+  imageUrl: string | null;
+  error: string | null;
+  usage?: unknown;
+}
+
+// Confirmed live via the ModelArk console's "Quick API access" sample code
+// for the activated ByteDance-Seedream-4.5 model — not guessed. Synchronous
+// (returns the image directly), unlike video's submit-then-poll flow.
+async function generateImageOnce(prompt: string): Promise<{ url: string; usage: unknown }> {
+  const res = await fetch(`${BASE_URL}/images/generations`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      model: IMAGE_MODEL,
+      prompt,
+      sequential_image_generation: "disabled",
+      response_format: "url",
+      size: "2K",
+      stream: false,
+      watermark: true,
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`BytePlus image generation ${res.status}:`, body);
+    throw new Error(`BytePlus image generation returned ${res.status}`);
+  }
+  const data = await res.json();
+  const url = data?.data?.[0]?.url;
+  if (typeof url !== "string") {
+    console.error("BytePlus image generation returned no url:", data);
+    throw new Error("BytePlus image generation returned no url");
+  }
+  return { url, usage: data.usage };
+}
+
+/** Same retry-once-then-friendly-error contract as submitVideoTask(). */
+export async function generateImage(prompt: string): Promise<ImageResult> {
+  try {
+    const { url, usage } = await generateImageOnce(prompt);
+    return { imageUrl: url, error: null, usage };
+  } catch {
+    try {
+      const { url, usage } = await generateImageOnce(prompt);
+      return { imageUrl: url, error: null, usage };
+    } catch {
+      return {
+        imageUrl: null,
+        error: "Couldn't generate the image — mind trying again?",
+      };
+    }
   }
 }

@@ -14,9 +14,13 @@ cloudinary.config({
 // this is the SDK's documented "upload by remote URL" path, equivalent to
 // downloading + re-uploading ourselves but without proxying the bytes
 // through this app's own server.
-async function uploadOnce(sourceUrl: string, publicId: string): Promise<string> {
+async function uploadOnce(
+  sourceUrl: string,
+  publicId: string,
+  resourceType: "video" | "image"
+): Promise<string> {
   const result = await cloudinary.uploader.upload(sourceUrl, {
-    resource_type: "video",
+    resource_type: resourceType,
     public_id: publicId,
     folder: "thunder",
     overwrite: true,
@@ -31,10 +35,29 @@ export async function persistVideo(
   publicId: string
 ): Promise<string | null> {
   try {
-    return await uploadOnce(sourceUrl, publicId);
+    return await uploadOnce(sourceUrl, publicId, "video");
   } catch {
     try {
-      return await uploadOnce(sourceUrl, publicId);
+      return await uploadOnce(sourceUrl, publicId, "video");
+    } catch (err) {
+      console.error(`Cloudinary upload failed for ${publicId}:`, err);
+      return null;
+    }
+  }
+}
+
+// Seedream's images/generations response URL isn't documented as expiring
+// (unlike video_url's confirmed ~24h window), but re-hosting anyway keeps
+// this consistent/safe rather than trusting an unconfirmed lifetime.
+export async function persistImage(
+  sourceUrl: string,
+  publicId: string
+): Promise<string | null> {
+  try {
+    return await uploadOnce(sourceUrl, publicId, "image");
+  } catch {
+    try {
+      return await uploadOnce(sourceUrl, publicId, "image");
     } catch (err) {
       console.error(`Cloudinary upload failed for ${publicId}:`, err);
       return null;

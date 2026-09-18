@@ -31,7 +31,9 @@ function toFlowNode(row: GenerationTaskRow): Node {
   const data =
     row.type === "prompt"
       ? { label: row.label, text: row.prompt }
-      : { status: row.status, prompt: row.prompt, ratio: row.ratio, videoSrc: row.media_url };
+      : row.type === "video"
+        ? { status: row.status, prompt: row.prompt, ratio: row.ratio, videoSrc: row.media_url }
+        : { status: row.status, prompt: row.prompt, src: row.media_url };
   return {
     id: row.id,
     type: row.type,
@@ -64,7 +66,7 @@ export default function ProjectPage() {
         setMessages(msgs);
         setNodes(
           tasks.map(toFlowNode).map((n) =>
-            n.type === "video"
+            n.type === "video" || n.type === "image"
               ? { ...n, data: { ...n.data, onRetry: () => retryFnRef.current(n.id) } }
               : n
           )
@@ -187,7 +189,9 @@ export default function ProjectPage() {
     if (!opts?.position) depth.current += 1;
 
     const nodeData =
-      type === "video" ? { ...data, onRetry: () => retryFnRef.current(id) } : data;
+      type === "video" || type === "image"
+        ? { ...data, onRetry: () => retryFnRef.current(id) }
+        : data;
     setNodes((prev) => [...prev, { id, type, position, data: nodeData }]);
     if (sourceId) {
       setEdges((prev) => [...prev, { id: `e-${sourceId}-${id}`, source: sourceId, target: id }]);
@@ -212,10 +216,10 @@ export default function ProjectPage() {
     setNodes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
     );
-    if (patch.status || patch.videoSrc) {
+    if (patch.status || patch.videoSrc || patch.src) {
       updateGenerationTask(id, {
         status: patch.status as GenerationTaskRow["status"] | undefined,
-        media_url: patch.videoSrc as string | undefined,
+        media_url: (patch.videoSrc ?? patch.src) as string | undefined,
         // Not part of the node's visual data — the original, expiring
         // BytePlus link, kept for reference alongside the permanent one.
         byteplus_url: patch.byteplusUrl as string | undefined,
@@ -248,9 +252,39 @@ export default function ProjectPage() {
     pollVideoTask(submitData.taskId, nodeId);
   };
 
+  // Synchronous — Seedream returns the image directly, no submit-then-poll
+  // task cycle like video.
+  const generateImageForNode = async (nodeId: string, prompt: string) => {
+    updateNodeData(nodeId, { status: "generating", startedAt: Date.now() });
+    const res = await fetch("/api/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    }).catch(() => null);
+    const data = await res?.json().catch(() => null);
+
+    if (!data?.imageUrl) {
+      updateNodeData(nodeId, { status: "error" });
+      return;
+    }
+    updateNodeData(nodeId, { status: "completed", src: data.imageUrl });
+    insertUsageLog({
+      conversationId,
+      generationTaskId: nodeId,
+      source: "byteplus",
+      model: data.model ?? "unknown",
+      rawUsage: data.usage,
+    }).catch(() => {});
+  };
+
   const handleRetryNode = (id: string) => {
     const node = nodes.find((n) => n.id === id);
-    if (!node || node.type !== "video") return;
+    if (!node) return;
+    if (node.type === "image") {
+      generateImageForNode(id, node.data.prompt);
+      return;
+    }
+    if (node.type !== "video") return;
     const lineageEdge = edges.find((e) => e.target === id && e.data?.kind !== "reference");
     const reference = resolveReference(lineageEdge?.source ?? null);
     updateNodeData(id, { status: "queued" });
@@ -266,6 +300,13 @@ export default function ProjectPage() {
     const reference = resolveReference(selectedNodeId ?? lastNodeId.current);
     const id = addNode("video", { status: "queued", prompt, ratio });
     generateVideoForNode(id, prompt, ratio, reference);
+  };
+
+  const handleGenerateImage = async (prompt: string) => {
+    // No image-to-image reference passing yet (Step 8 scope) — text-to-image
+    // only, regardless of what's selected on the canvas.
+    const id = addNode("image", { status: "queued", prompt });
+    generateImageForNode(id, prompt);
   };
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
@@ -301,6 +342,10 @@ export default function ProjectPage() {
       );
       extraReferenceIds.forEach((refId) => handleReferenceConnect(refId, id));
       generateVideoForNode(id, prompt, "16:9", reference);
+    } else if (type === "image") {
+      const id = addNode("image", { status: "queued", prompt }, { sourceId, position });
+      extraReferenceIds.forEach((refId) => handleReferenceConnect(refId, id));
+      generateImageForNode(id, prompt);
     } else if (type === "prompt") {
       // AI-continued prompt ("Ask AI to continue") — lands as a prompt
       // node, same shape as a chat-refined prompt, so it can itself be
@@ -308,9 +353,6 @@ export default function ProjectPage() {
       const id = addNode("prompt", { label: "Continued", text: prompt }, { sourceId, position });
       extraReferenceIds.forEach((refId) => handleReferenceConnect(refId, id));
     }
-    // image: no generation path yet — Seedream isn't wired in (see MODELS
-    // in mock-generations.ts, still "Coming soon"). The add-node menu
-    // already disables this option, so type is always "video" for now.
   };
 
   const pollVideoTask = (taskId: string, nodeId: string, attempt = 0) => {
@@ -360,6 +402,7 @@ export default function ProjectPage() {
         canvasContext={canvasContext}
         onFinalPrompt={handleFinalPrompt}
         onGenerateRequest={handleGenerate}
+        onGenerateImageRequest={handleGenerateImage}
       />
       <Canvas
         conversationId={conversationId}

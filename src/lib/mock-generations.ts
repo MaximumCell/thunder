@@ -14,10 +14,10 @@ export const MODELS = [
   },
   {
     id: "seedream",
-    name: "Seedream",
+    name: "Seedream 4.5",
     mode: "Image",
-    status: "Coming soon" as const,
-    description: "Text-to-image generation on the same ModelArk platform.",
+    status: "Available" as const,
+    description: "Text-to-image generation — drag a node on the canvas to use it.",
   },
 ];
 

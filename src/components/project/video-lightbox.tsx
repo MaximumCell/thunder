@@ -6,9 +6,11 @@ import { X } from "lucide-react";
 
 export function VideoLightbox({
   src,
+  kind = "video",
   onClose,
 }: {
   src: string;
+  kind?: "video" | "image";
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -30,13 +32,23 @@ export function VideoLightbox({
       >
         <X className="size-4.5" />
       </button>
-      <video
-        src={src}
-        controls
-        autoPlay
-        className="max-h-full max-w-full rounded-lg"
-        onClick={(e) => e.stopPropagation()}
-      />
+      {kind === "video" ? (
+        <video
+          src={src}
+          controls
+          autoPlay
+          className="max-h-full max-w-full rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt=""
+          className="max-h-full max-w-full rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
     </div>,
     document.body
   );

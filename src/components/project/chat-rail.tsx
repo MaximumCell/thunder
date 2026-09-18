@@ -16,6 +16,7 @@ export function ChatRail({
   canvasContext,
   onFinalPrompt,
   onGenerateRequest,
+  onGenerateImageRequest,
 }: {
   conversationId: string;
   title: string | null;
@@ -23,9 +24,11 @@ export function ChatRail({
   canvasContext?: string;
   onFinalPrompt: (text: string) => void;
   onGenerateRequest: (prompt: string, ratio: Ratio) => void;
+  onGenerateImageRequest: (prompt: string) => void;
 }) {
   const [messages, setMessages] = useState<AgentMessage[]>(initialMessages);
   const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
+  const [finalMediaType, setFinalMediaType] = useState<"video" | "image">("video");
   const [input, setInput] = useState("");
   const [ratio, setRatio] = useState<Ratio>("16:9");
   const [busy, setBusy] = useState(false);
@@ -51,6 +54,7 @@ export function ChatRail({
       }).catch(() => {});
       if (result.status === "ready" && result.finalPrompt) {
         setFinalPrompt(result.finalPrompt);
+        setFinalMediaType(result.mediaType);
         onFinalPrompt(result.finalPrompt);
       }
     } catch {
@@ -90,7 +94,11 @@ export function ChatRail({
 
   const generate = () => {
     if (!finalPrompt) return;
-    onGenerateRequest(finalPrompt, ratio);
+    if (finalMediaType === "image") {
+      onGenerateImageRequest(finalPrompt);
+    } else {
+      onGenerateRequest(finalPrompt, ratio);
+    }
     setFinalPrompt(null);
   };
 
@@ -117,7 +125,7 @@ export function ChatRail({
       <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
         {messages.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Describe the video you want to make.
+            Describe the video or image you want to make.
           </p>
         )}
         {messages.map((m, i) => (
@@ -152,7 +160,8 @@ export function ChatRail({
       {finalPrompt && (
         <div className="mx-4 mb-3 flex items-start justify-between gap-3 rounded-lg bg-secondary px-3 py-2">
           <p className="text-xs text-muted-foreground">
-            Ready — refine further or generate.
+            Ready to generate {finalMediaType === "image" ? "an image" : "a video"} — refine
+            further or generate.
           </p>
           <Button size="sm" className="shrink-0 rounded-full" onClick={generate}>
             Generate
@@ -161,22 +170,24 @@ export function ChatRail({
       )}
 
       <div className="border-t border-border p-4">
-        <div className="mb-2 flex gap-1">
-          {RATIOS.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRatio(r)}
-              className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
-                ratio === r
-                  ? "bg-secondary text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        {finalMediaType !== "image" && (
+          <div className="mb-2 flex gap-1">
+            {RATIOS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRatio(r)}
+                className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                  ratio === r
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <Textarea
             value={input}
@@ -191,7 +202,7 @@ export function ChatRail({
               finalPrompt
                 ? "Ask for a change, or click Generate…"
                 : messages.length === 0
-                  ? "Describe the video you want to make..."
+                  ? "Describe the video or image you want to make..."
                   : "Reply..."
             }
             rows={2}

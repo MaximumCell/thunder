@@ -33,18 +33,26 @@ export async function listConversations(): Promise<ConversationRow[]> {
   return data ?? [];
 }
 
-export async function loadProjectPreview(conversationId: string): Promise<string | null> {
+export interface ProjectPreview {
+  url: string;
+  type: "video" | "image";
+}
+
+export async function loadProjectPreview(
+  conversationId: string
+): Promise<ProjectPreview | null> {
   const supabase = createClient();
   const { data } = await supabase
     .from("generation_tasks")
-    .select("media_url")
+    .select("media_url, type")
     .eq("conversation_id", conversationId)
     .eq("status", "completed")
     .not("media_url", "is", null)
+    .in("type", ["video", "image"])
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  return data?.media_url ?? null;
+  return data ? { url: data.media_url, type: data.type } : null;
 }
 
 export async function loadConversation(id: string): Promise<ConversationRow> {
