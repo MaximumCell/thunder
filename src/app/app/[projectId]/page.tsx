@@ -216,6 +216,9 @@ export default function ProjectPage() {
       updateGenerationTask(id, {
         status: patch.status as GenerationTaskRow["status"] | undefined,
         media_url: patch.videoSrc as string | undefined,
+        // Not part of the node's visual data — the original, expiring
+        // BytePlus link, kept for reference alongside the permanent one.
+        byteplus_url: patch.byteplusUrl as string | undefined,
       }).catch(() => {});
     }
   };
@@ -320,7 +323,11 @@ export default function ProjectPage() {
       const data = await res?.json().catch(() => null);
 
       if (data?.status === "completed") {
-        updateNodeData(nodeId, { status: "completed", videoSrc: data.videoUrl });
+        updateNodeData(nodeId, {
+          status: "completed",
+          videoSrc: data.videoUrl,
+          byteplusUrl: data.byteplusUrl,
+        });
         insertUsageLog(nodeId, data.model ?? "unknown", data.usage).catch(() => {});
       } else if (data?.status === "error") {
         updateNodeData(nodeId, { status: "error" });

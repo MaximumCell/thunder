@@ -15,6 +15,9 @@ export interface GenerationTaskRow {
   label: string | null;
   prompt: string | null;
   media_url: string | null;
+  // The original, expiring BytePlus video_url — kept for reference even
+  // after media_url gets re-hosted on Cloudinary (Step 6).
+  byteplus_url: string | null;
   ratio: string | null;
   position_x: number;
   position_y: number;
@@ -101,7 +104,7 @@ export async function loadGenerationTasks(
   const { data, error } = await supabase
     .from("generation_tasks")
     .select(
-      "id, parent_id, type, status, label, prompt, media_url, ratio, position_x, position_y"
+      "id, parent_id, type, status, label, prompt, media_url, byteplus_url, ratio, position_x, position_y"
     )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
@@ -143,6 +146,7 @@ export async function updateGenerationTask(
   patch: Partial<{
     status: GenerationTaskRow["status"];
     media_url: string;
+    byteplus_url: string;
     parent_id: string | null;
   }>
 ) {
