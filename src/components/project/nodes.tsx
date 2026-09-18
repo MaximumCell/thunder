@@ -50,7 +50,6 @@ export function VideoNode({
   data,
 }: NodeProps<{
   status: GenerationStatus;
-  progress: number;
   videoSrc?: string;
   prompt: string;
 }>) {
@@ -71,7 +70,7 @@ export function VideoNode({
           <div className="flex size-full flex-col items-center justify-center gap-2">
             <span className="size-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
             <p className="text-[10px] text-muted-foreground">
-              {data.status === "queued" ? "Queued…" : `${data.progress}%`}
+              {data.status === "queued" ? "Queued…" : "Generating…"}
             </p>
           </div>
         )}
