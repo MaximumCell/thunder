@@ -6,20 +6,25 @@ import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { RATIOS, type Ratio } from "@/lib/mock-generations";
+import { insertMessage } from "@/lib/db";
 import type { AgentMessage, AgentResult } from "@/lib/agent";
 
 export function ChatRail({
-  initialMessage,
-  onBrief,
+  conversationId,
+  title,
+  initialMessages,
+  canvasContext,
   onFinalPrompt,
   onGenerateRequest,
 }: {
-  initialMessage?: string;
-  onBrief: (text: string) => void;
+  conversationId: string;
+  title: string | null;
+  initialMessages: AgentMessage[];
+  canvasContext?: string;
   onFinalPrompt: (text: string) => void;
   onGenerateRequest: (prompt: string, ratio: Ratio) => void;
 }) {
-  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [messages, setMessages] = useState<AgentMessage[]>(initialMessages);
   const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [ratio, setRatio] = useState<Ratio>("16:9");
@@ -27,24 +32,17 @@ export function ChatRail({
   const startedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const send = async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || busy) return;
-    if (messages.length === 0) onBrief(trimmed);
-
-    const next: AgentMessage[] = [...messages, { role: "user", content: trimmed }];
-    setMessages(next);
-    setInput("");
+  const refine = async (next: AgentMessage[]) => {
     setBusy(true);
-
     try {
       const res = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
+        body: JSON.stringify({ messages: next, canvasContext }),
       });
       const result: AgentResult = await res.json();
       setMessages((m) => [...m, { role: "assistant", content: result.reply }]);
+      insertMessage(conversationId, "assistant", result.reply).catch(() => {});
       if (result.status === "ready" && result.finalPrompt) {
         setFinalPrompt(result.finalPrompt);
         onFinalPrompt(result.finalPrompt);
@@ -59,13 +57,26 @@ export function ChatRail({
     }
   };
 
+  const send = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+
+    const next: AgentMessage[] = [...messages, { role: "user", content: trimmed }];
+    setMessages(next);
+    setInput("");
+    insertMessage(conversationId, "user", trimmed).catch(() => {});
+    await refine(next);
+  };
+
+  // A conversation that ends on a user message (just created, or interrupted
+  // before the assistant replied) needs to auto-continue once on load.
   useEffect(() => {
-    if (initialMessage && !startedRef.current) {
-      startedRef.current = true;
-      send(initialMessage);
-    }
+    if (startedRef.current) return;
+    startedRef.current = true;
+    const last = initialMessages[initialMessages.length - 1];
+    if (last?.role === "user") refine(initialMessages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessage]);
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -79,11 +90,23 @@ export function ChatRail({
 
   return (
     <aside className="flex h-full w-[380px] shrink-0 flex-col border-r border-border">
-      <div className="flex items-center border-b border-border px-4 py-4">
-        <Link href="/app" className="text-sm font-medium tracking-tight">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-4">
+        <Link href="/app" className="shrink-0 text-sm font-medium tracking-tight">
           Thunder
         </Link>
+        {title && (
+          <>
+            <span className="text-muted-foreground/40">/</span>
+            <span className="truncate text-sm text-muted-foreground">{title}</span>
+          </>
+        )}
       </div>
+
+      {canvasContext && (
+        <div className="mx-4 mt-3 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-xs text-muted-foreground">
+          Referencing selected node
+        </div>
+      )}
 
       <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
         {messages.length === 0 && (

@@ -24,6 +24,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await refine(body.messages);
+  const canvasContext =
+    typeof (body as { canvasContext?: unknown }).canvasContext === "string"
+      ? (body as { canvasContext?: string }).canvasContext
+      : undefined;
+
+  const result = await refine(body.messages, canvasContext);
   return NextResponse.json(result);
 }

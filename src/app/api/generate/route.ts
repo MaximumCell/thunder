@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { submitVideoTask } from "@/lib/byteplus";
+import { submitVideoTask, type VideoReference } from "@/lib/byteplus";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -11,8 +11,17 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  const reference: VideoReference | undefined =
+    (body?.reference?.type === "video_url" || body?.reference?.type === "image_url") &&
+    typeof body.reference.url === "string"
+      ? {
+          type: body.reference.type,
+          url: body.reference.url,
+          mode: body.reference.mode === "extend" ? "extend" : "reference",
+        }
+      : undefined;
 
-  const result = await submitVideoTask(prompt, ratio);
+  const result = await submitVideoTask(prompt, ratio, reference);
   if (!result.taskId) {
     return NextResponse.json({ error: result.error }, { status: 502 });
   }
