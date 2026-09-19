@@ -7,6 +7,7 @@ import type { GenerationStatus } from "@/lib/mock-generations";
 import { insertUsageLog } from "@/lib/db";
 import { MODEL as CONTINUE_MODEL } from "@/lib/agent";
 import { VideoLightbox } from "./video-lightbox";
+import { ReferenceChips, ReferencePicker, useReferenceImages } from "./reference-attachments";
 
 function NodeShell({
   children,
@@ -38,14 +39,51 @@ function NodeShell({
   );
 }
 
+// The user-attached reference images a node was generated with (persisted on
+// generation_tasks.reference_urls), so a reloaded project still shows them.
+function ReferenceThumbs({ urls }: { urls?: string[] }) {
+  if (!urls?.length) return null;
+  return (
+    <div className="flex items-center gap-1 px-2.5 pb-2">
+      <span className="text-[9px] text-muted-foreground/60">Refs</span>
+      {urls.map((url) => (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={url}
+          src={url}
+          alt="Reference"
+          className="size-5 rounded border border-border object-cover"
+        />
+      ))}
+    </div>
+  );
+}
+
 export function PromptNode({
   data,
-}: NodeProps<{ label: string; text: string }>) {
+}: NodeProps<{
+  label: string;
+  text: string;
+  referenceUrls?: string[];
+  // The open "Refined prompt" node can be edited in place; generating from it
+  // replaces it with the output node.
+  editable?: boolean;
+  onTextChange?: (text: string) => void;
+  onTextCommit?: (text: string) => void;
+}>) {
   const [copied, setCopied] = useState(false);
+  // Local copy so typing stays snappy; re-synced when the text changes from
+  // outside (e.g. the agent revises the prompt).
+  const [text, setText] = useState(data.text);
+  const [seenText, setSeenText] = useState(data.text);
+  if (data.text !== seenText) {
+    setSeenText(data.text);
+    setText(data.text);
+  }
 
   const copyText = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(data.text).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -66,9 +104,27 @@ export function PromptNode({
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </button>
       </div>
-      <div className="nodrag nowheel thin-scrollbar max-h-32 overflow-y-auto pr-1 text-xs leading-relaxed text-foreground/90">
-        {data.text}
-      </div>
+      {data.editable ? (
+        <textarea
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            data.onTextChange?.(e.target.value);
+          }}
+          onBlur={() => data.onTextCommit?.(text)}
+          spellCheck={false}
+          className="nodrag nowheel thin-scrollbar h-36 w-full resize-none rounded-md border border-border bg-secondary/40 p-2 text-xs leading-relaxed text-foreground/90 outline-none focus:border-white/30"
+        />
+      ) : (
+        <div className="nodrag nowheel thin-scrollbar max-h-32 overflow-y-auto pr-1 text-xs leading-relaxed text-foreground/90">
+          {data.text}
+        </div>
+      )}
+      {data.referenceUrls?.length ? (
+        <div className="-mx-2.5 mt-2 -mb-2">
+          <ReferenceThumbs urls={data.referenceUrls} />
+        </div>
+      ) : null}
     </NodeShell>
   );
 }
@@ -118,6 +174,8 @@ export function VideoNode({
   prompt: string;
   onRetry?: () => void;
   startedAt?: number;
+  referenceUrls?: string[];
+  errorMessage?: string;
 }>) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -204,8 +262,16 @@ export function VideoNode({
           </div>
         )}
         {data.status === "error" && (
-          <div className="flex size-full flex-col items-center justify-center gap-1.5">
+          <div className="flex size-full flex-col items-center justify-center gap-1.5 px-2 text-center">
             <p className="text-[10px] text-destructive">Failed</p>
+            {data.errorMessage && (
+              <p
+                title={data.errorMessage}
+                className="nowheel thin-scrollbar max-h-20 w-full overflow-y-auto px-1 text-[9px] leading-snug break-words text-muted-foreground"
+              >
+                {data.errorMessage}
+              </p>
+            )}
             {data.onRetry && (
               <button
                 type="button"
@@ -224,6 +290,7 @@ export function VideoNode({
       <p className="line-clamp-1 px-2.5 py-2 text-[10px] text-muted-foreground">
         {data.prompt}
       </p>
+      <ReferenceThumbs urls={data.referenceUrls} />
     </NodeShell>
   );
 }
@@ -236,9 +303,12 @@ export function DraftNode({
 }: NodeProps<{
   conversationId: string;
   initialPrompt?: string;
-  onSubmit: (type: "video" | "image" | "prompt", prompt: string) => void;
+  sourcePreview?: { kind: "image" | "video"; src: string };
+  onSubmit: (type: "video" | "image" | "prompt", prompt: string, referenceUrls?: string[]) => void;
   onCancel: () => void;
 }>) {
+  // Images pasted/dropped/attached here go to the new node as references.
+  const refs = useReferenceImages();
   const [type, setType] = useState<"video" | "image" | "continue" | null>(null);
   const [prompt, setPrompt] = useState(data.initialPrompt ?? "");
   const [instruction, setInstruction] = useState("");
@@ -246,8 +316,8 @@ export function DraftNode({
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
-    if (!type || type === "continue" || !prompt.trim()) return;
-    data.onSubmit(type, prompt.trim());
+    if (!type || type === "continue" || !prompt.trim() || refs.uploading) return;
+    data.onSubmit(type, prompt.trim(), refs.urls);
   };
 
   const askContinue = async () => {
@@ -283,8 +353,37 @@ export function DraftNode({
   };
 
   return (
-    <div className="nodrag w-64 rounded-xl border border-border bg-card p-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+    <div
+      {...refs.dropProps}
+      className={`nodrag w-64 rounded-xl border bg-card p-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)] ${
+        refs.dragging ? "border-dashed border-white/50" : "border-border"
+      }`}
+    >
       <Handle type="target" position={Position.Left} className="!size-2 !border-0 !bg-white/40" />
+
+      {data.sourcePreview && (
+        <div className="mb-2.5 flex items-center gap-2.5 rounded-lg bg-secondary/60 p-1.5">
+          <div className="size-12 shrink-0 overflow-hidden rounded-md bg-black">
+            {data.sourcePreview.kind === "image" ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={data.sourcePreview.src} alt="Reference" className="size-full object-cover" />
+            ) : (
+              <video
+                src={data.sourcePreview.src}
+                className="size-full object-cover"
+                muted
+                playsInline
+                preload="metadata"
+              />
+            )}
+          </div>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            {data.sourcePreview.kind === "image"
+              ? "This image will be used as the reference"
+              : "This clip is used as the reference (say \"continue\" to extend it)"}
+          </p>
+        </div>
+      )}
 
       {!type ? (
         <div className="flex flex-col gap-1">
@@ -364,11 +463,13 @@ export function DraftNode({
           <p className="px-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
             {type === "image" ? "Image prompt" : "Video prompt"}
           </p>
+          <ReferenceChips refs={refs} />
           <div className="flex items-end gap-2">
             <Textarea
               autoFocus
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              onPaste={refs.onPaste}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -383,11 +484,12 @@ export function DraftNode({
               size="sm"
               className="shrink-0 rounded-full"
               onClick={submit}
-              disabled={!prompt.trim()}
+              disabled={!prompt.trim() || refs.uploading}
             >
               <Send className="size-3.5" />
             </Button>
           </div>
+          <ReferencePicker refs={refs} compact />
         </div>
       )}
     </div>
@@ -423,6 +525,8 @@ export function ImageNode({
   prompt: string;
   onRetry?: () => void;
   startedAt?: number;
+  referenceUrls?: string[];
+  errorMessage?: string;
 }>) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -498,8 +602,16 @@ export function ImageNode({
           </div>
         )}
         {data.status === "error" && (
-          <div className="flex size-full flex-col items-center justify-center gap-1.5">
+          <div className="flex size-full flex-col items-center justify-center gap-1.5 px-2 text-center">
             <p className="text-[10px] text-destructive">Failed</p>
+            {data.errorMessage && (
+              <p
+                title={data.errorMessage}
+                className="nowheel thin-scrollbar max-h-20 w-full overflow-y-auto px-1 text-[9px] leading-snug break-words text-muted-foreground"
+              >
+                {data.errorMessage}
+              </p>
+            )}
             {data.onRetry && (
               <button
                 type="button"
@@ -518,6 +630,7 @@ export function ImageNode({
       <p className="line-clamp-1 px-2.5 py-2 text-[10px] text-muted-foreground">
         {data.prompt}
       </p>
+      <ReferenceThumbs urls={data.referenceUrls} />
     </NodeShell>
   );
 }

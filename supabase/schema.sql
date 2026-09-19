@@ -96,6 +96,8 @@ create table if not exists public.generation_tasks (
   -- The original, expiring BytePlus video_url — kept for reference/
   -- debugging after Step 6 re-hosts the permanent copy into media_url.
   byteplus_url text,
+  -- Cloudinary URLs of user-attached reference images this node was generated with.
+  reference_urls text[] not null default '{}',
   ratio text,
   position_x double precision not null default 0,
   position_y double precision not null default 0,

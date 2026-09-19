@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { refine, type AgentMessage } from "@/lib/agent";
+import { parseAgentImages } from "@/lib/references";
 
 function isValidMessages(body: unknown): body is { messages: AgentMessage[] } {
   if (typeof body !== "object" || body === null) return false;
@@ -32,6 +33,9 @@ export async function POST(request: Request) {
   const rawMode = (body as { mediaMode?: unknown }).mediaMode;
   const mediaMode = rawMode === "video" || rawMode === "image" ? rawMode : undefined;
 
-  const result = await refine(body.messages, canvasContext, mediaMode);
+  // Up to 5 images per turn, each with a label saying what it is.
+  const referenceImages = parseAgentImages((body as { referenceImages?: unknown }).referenceImages, 5);
+
+  const result = await refine(body.messages, canvasContext, mediaMode, referenceImages);
   return NextResponse.json(result);
 }

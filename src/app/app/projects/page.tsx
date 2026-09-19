@@ -3,16 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Topbar } from "@/components/dashboard/topbar";
-import {
-  listConversations,
-  loadProjectPreview,
-  type ConversationRow,
-  type ProjectPreview,
-} from "@/lib/db";
-
-interface ProjectCard extends ConversationRow {
-  preview: ProjectPreview | null;
-}
+import { ProjectCard, type ProjectCardData } from "@/components/dashboard/project-card";
+import { listConversations, loadProjectPreview } from "@/lib/db";
 
 // Sample cards to preview the grid layout while your real project history is
 // thin — clearly badged, not linked anywhere, never written to the database.
@@ -23,7 +15,7 @@ const SAMPLE_PROJECTS = [
 ];
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectCard[] | null>(null);
+  const [projects, setProjects] = useState<ProjectCardData[] | null>(null);
 
   useEffect(() => {
     listConversations()
@@ -60,50 +52,11 @@ export default function ProjectsPage() {
           {projects && projects.length > 0 && (
             <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
               {projects.map((p) => (
-                <Link
+                <ProjectCard
                   key={p.id}
-                  href={`/app/${p.id}`}
-                  className="group overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-white/25"
-                >
-                  <div className="relative aspect-video w-full overflow-hidden bg-secondary">
-                    {p.preview?.type === "video" ? (
-                      <video
-                        className="size-full object-cover"
-                        src={p.preview.url}
-                        autoPlay
-                        muted
-                        loop
-                        playsInline
-                        preload="auto"
-                      />
-                    ) : p.preview?.type === "image" ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        className="size-full object-cover"
-                        src={p.preview.url}
-                        alt={p.title || "Project preview"}
-                      />
-                    ) : (
-                      <div className="flex size-full items-center justify-center">
-                        <span className="flex size-10 items-center justify-center rounded-lg bg-foreground/10 text-sm font-semibold text-muted-foreground">
-                          {(p.title || "?")[0].toUpperCase()}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-3">
-                    <p className="line-clamp-1 text-sm font-medium">
-                      {p.title || "Untitled"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {new Date(p.created_at).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </p>
-                  </div>
-                </Link>
+                  project={p}
+                  onDeleted={(id) => setProjects((list) => list?.filter((x) => x.id !== id) ?? list)}
+                />
               ))}
 
               {SAMPLE_PROJECTS.map((s) => (

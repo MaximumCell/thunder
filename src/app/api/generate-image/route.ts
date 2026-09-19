@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateImage, IMAGE_MODEL } from "@/lib/byteplus";
 import { persistImage } from "@/lib/cloudinary";
+import { parseReferenceImages } from "@/lib/references";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -9,9 +10,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Expected { prompt: string }" }, { status: 400 });
   }
 
-  const result = await generateImage(prompt);
+  const result = await generateImage(prompt, parseReferenceImages(body?.referenceImages));
   if (!result.imageUrl) {
-    return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json(
+      { error: result.error, referenceError: result.referenceError },
+      { status: result.referenceError ? 422 : 502 }
+    );
   }
 
   // Same treatment as video (Step 6) — re-host before ever reporting done.

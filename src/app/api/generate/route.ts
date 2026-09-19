@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { submitVideoTask, type VideoReference } from "@/lib/byteplus";
+import { parseReferenceImages } from "@/lib/references";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -21,9 +22,24 @@ export async function POST(request: Request) {
         }
       : undefined;
 
-  const result = await submitVideoTask(prompt, ratio, reference);
+  // Seedance 2.5 accepts 4-30 seconds; anything else falls back to the model default.
+  const duration =
+    Number.isInteger(body?.duration) && body.duration >= 4 && body.duration <= 30
+      ? (body.duration as number)
+      : undefined;
+
+  const result = await submitVideoTask(
+    prompt,
+    ratio,
+    reference,
+    parseReferenceImages(body?.referenceImages),
+    duration
+  );
   if (!result.taskId) {
-    return NextResponse.json({ error: result.error }, { status: 502 });
+    return NextResponse.json(
+      { error: result.error, referenceError: result.referenceError },
+      { status: result.referenceError ? 422 : 502 }
+    );
   }
   return NextResponse.json({ taskId: result.taskId });
 }

@@ -18,6 +18,8 @@ export interface GenerationTaskRow {
   // The original, expiring BytePlus video_url — kept for reference even
   // after media_url gets re-hosted on Cloudinary (Step 6).
   byteplus_url: string | null;
+  // Cloudinary URLs of the user-attached reference images this node used.
+  reference_urls: string[];
   ratio: string | null;
   position_x: number;
   position_y: number;
@@ -82,6 +84,14 @@ export async function createConversation(title: string): Promise<string> {
   return data.id;
 }
 
+/** Cascades to messages/generation_tasks. Used to back out a project whose
+ * very first generation was rejected before it produced anything. */
+export async function deleteConversation(id: string) {
+  const supabase = createClient();
+  const { error } = await supabase.from("conversations").delete().eq("id", id);
+  if (error) throw error;
+}
+
 export async function loadMessages(conversationId: string): Promise<AgentMessage[]> {
   const supabase = createClient();
   const { data, error } = await supabase
@@ -112,7 +122,7 @@ export async function loadGenerationTasks(
   const { data, error } = await supabase
     .from("generation_tasks")
     .select(
-      "id, parent_id, type, status, label, prompt, media_url, byteplus_url, ratio, position_x, position_y"
+      "id, parent_id, type, status, label, prompt, media_url, byteplus_url, reference_urls, ratio, position_x, position_y"
     )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
@@ -130,6 +140,8 @@ export async function insertGenerationTask(
     label?: string;
     prompt?: string;
     ratio?: string;
+    referenceUrls?: string[];
+    mediaUrl?: string;
     position: { x: number; y: number };
   }
 ) {
@@ -143,6 +155,8 @@ export async function insertGenerationTask(
     label: task.label ?? null,
     prompt: task.prompt ?? null,
     ratio: task.ratio ?? null,
+    reference_urls: task.referenceUrls ?? [],
+    media_url: task.mediaUrl ?? null,
     position_x: task.position.x,
     position_y: task.position.y,
   });
@@ -156,6 +170,7 @@ export async function updateGenerationTask(
     media_url: string;
     byteplus_url: string;
     parent_id: string | null;
+    prompt: string;
   }>
 ) {
   const supabase = createClient();

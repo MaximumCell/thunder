@@ -22,23 +22,44 @@ import {
 import type { AgentMessage } from "@/lib/agent";
 
 const CHAIN_STEP_X = 300;
+const CHILD_STEP_Y = 260;
 const POLL_INTERVAL_MS = 5_000;
 // ponytail: fixed cap rather than reading execution_expires_after from the
 // task — good enough until a real "still rendering" state is needed.
 const POLL_MAX_ATTEMPTS = 60; // ~5 minutes
 
 function toFlowNode(row: GenerationTaskRow): Node {
+  const referenceUrls = row.reference_urls ?? [];
   const data =
     row.type === "prompt"
-      ? { label: row.label, text: row.prompt }
+      ? { label: row.label, text: row.prompt, referenceUrls }
       : row.type === "video"
-        ? { status: row.status, prompt: row.prompt, ratio: row.ratio, videoSrc: row.media_url }
-        : { status: row.status, prompt: row.prompt, src: row.media_url };
+        ? {
+            status: row.status,
+            prompt: row.prompt,
+            ratio: row.ratio,
+            videoSrc: row.media_url,
+            referenceUrls,
+          }
+        : { status: row.status, prompt: row.prompt, src: row.media_url, referenceUrls };
   return {
     id: row.id,
     type: row.type,
     position: { x: row.position_x, y: row.position_y },
     data,
+  };
+}
+
+type VideoRef = { type: "video_url" | "image_url"; url: string; mode?: "extend" | "reference" };
+
+/** An image reference is just another reference image (role reference_image),
+ * so fold it into the image list, de-duplicated and first; only a video
+ * reference stays separate (it needs role reference_video / extend). */
+function splitReference(reference: VideoRef | undefined, urls: string[]) {
+  const all = reference?.type === "image_url" ? [reference.url, ...urls] : urls;
+  return {
+    reference: reference?.type === "video_url" ? reference : undefined,
+    urls: [...new Set(all)],
   };
 }
 
@@ -52,10 +73,33 @@ export default function ProjectPage() {
   const lastNodeId = useRef<string | null>(null);
   const depth = useRef(0);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // The rail's "x" on the selected-node chip: ignore that selection until the
+  // user selects something else (or clears the selection).
+  const [dismissedId, setDismissedId] = useState<string | null>(null);
+  const selectedNode =
+    selectedNodeId && selectedNodeId !== dismissedId
+      ? nodes.find((n) => n.id === selectedNodeId)
+      : undefined;
+  // A selected node that was sent along with a chat message stays the reference
+  // (even if you click away) until you generate or pick a different node.
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  const activeRefNode = selectedNode ?? (pinnedId ? nodes.find((n) => n.id === pinnedId) : undefined);
+  // Where nodes sit and how many children each has, so a new node lands next
+  // to the node it comes from instead of at the far end of the canvas.
+  const positions = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const childCounts = useRef<Map<string, number>>(new Map());
   // Manual node-to-node references (canvas connect-two-existing-nodes) —
   // targetId -> source node ids it should use as a reference, on top of
   // generation_tasks.parent_id's single-parent lineage.
   const referencesByTarget = useRef<Map<string, string[]>>(new Map());
+  // Node inserts run one after another: a node whose parent_id points at a
+  // node created a moment earlier (auto-generate after a refined prompt)
+  // would otherwise hit the parent FK before that parent row exists (409).
+  const insertQueue = useRef<Promise<unknown>>(Promise.resolve());
+  // The one "Refined prompt" node that further agent revisions update in place,
+  // until something is generated from it (then the next refinement starts a
+  // fresh node). Without this every agent reply piled up another node.
+  const refinedNodeId = useRef<string | null>(null);
 
   useEffect(() => {
     loadConversation(conversationId)
@@ -68,7 +112,17 @@ export default function ProjectPage() {
           tasks.map(toFlowNode).map((n) =>
             n.type === "video" || n.type === "image"
               ? { ...n, data: { ...n.data, onRetry: () => retryFnRef.current(n.id) } }
-              : n
+              : n.type === "prompt" && n.data.label === "Refined prompt"
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      editable: true,
+                      onTextChange: (t: string) => retryFnRef.current(n.id, "text", t),
+                      onTextCommit: (t: string) => retryFnRef.current(n.id, "commit", t),
+                    },
+                  }
+                : n
           )
         );
 
@@ -83,7 +137,7 @@ export default function ProjectPage() {
           id: `ref-${r.reference_task_id}-${r.generation_task_id}`,
           source: r.reference_task_id,
           target: r.generation_task_id,
-          type: "smoothstep",
+          type: "deletable",
           style: { stroke: "rgba(147,197,253,0.6)", strokeWidth: 1.5, strokeDasharray: "4 3" },
           data: { kind: "reference" },
         }));
@@ -93,11 +147,21 @@ export default function ProjectPage() {
           referencesByTarget.current.set(r.generation_task_id, list);
         });
 
+        tasks.forEach((t) => {
+          positions.current.set(t.id, { x: t.position_x, y: t.position_y });
+          if (t.parent_id) {
+            childCounts.current.set(t.parent_id, (childCounts.current.get(t.parent_id) ?? 0) + 1);
+          }
+        });
+
         setEdges([...lineageEdges, ...refEdges]);
         if (tasks.length > 0) {
           const last = tasks[tasks.length - 1];
           lastNodeId.current = last.id;
           depth.current = tasks.length;
+          if (last.type === "prompt" && last.label === "Refined prompt") {
+            refinedNodeId.current = last.id;
+          }
         }
       })
       .catch(() => setMessages([]));
@@ -135,7 +199,11 @@ export default function ProjectPage() {
   // Always holds the latest handleRetryNode closure (refreshed every render
   // below) — lets a node's data carry a stable `() => retryFnRef.current(id)`
   // callback created once at node-creation time without going stale.
-  const retryFnRef = useRef<(id: string) => void>(() => {});
+  // Also carries edits to an editable Refined-prompt node ("text" while typing,
+  // "commit" to persist on blur) so those callbacks stay stable too.
+  const retryFnRef = useRef<(id: string, action?: "retry" | "text" | "commit", text?: string) => void>(
+    () => {}
+  );
 
   const handleReferenceConnect = (sourceId: string, targetId: string) => {
     const list = referencesByTarget.current.get(targetId) ?? [];
@@ -156,7 +224,11 @@ export default function ProjectPage() {
         list.filter((refId) => refId !== id)
       );
     });
-    if (lastNodeId.current === id) lastNodeId.current = null;
+    // Deleting the latest node must not orphan the next one: fall back to its parent.
+    if (lastNodeId.current === id) {
+      lastNodeId.current = edges.find((e) => e.target === id && e.data?.kind !== "reference")?.source ?? null;
+    }
+    if (refinedNodeId.current === id) refinedNodeId.current = null;
     deleteGenerationTask(id).catch(() => {});
   };
 
@@ -185,29 +257,48 @@ export default function ProjectPage() {
   ) => {
     const id = crypto.randomUUID();
     const sourceId = opts?.sourceId !== undefined ? opts.sourceId : lastNodeId.current;
-    const position = opts?.position ?? { x: depth.current * CHAIN_STEP_X, y: 120 };
+    const from = sourceId ? positions.current.get(sourceId) : undefined;
+    const position =
+      opts?.position ??
+      (from
+        ? { x: from.x + CHAIN_STEP_X, y: from.y + (childCounts.current.get(sourceId!) ?? 0) * CHILD_STEP_Y }
+        : { x: depth.current * CHAIN_STEP_X, y: 120 });
     if (!opts?.position) depth.current += 1;
+    positions.current.set(id, position);
+    if (sourceId) childCounts.current.set(sourceId, (childCounts.current.get(sourceId) ?? 0) + 1);
+    // Something is being generated from the refined node: it's final now.
+    if (sourceId && sourceId === refinedNodeId.current) refinedNodeId.current = null;
 
     const nodeData =
       type === "video" || type === "image"
         ? { ...data, onRetry: () => retryFnRef.current(id) }
-        : data;
+        : type === "prompt" && data.editable
+          ? {
+              ...data,
+              onTextChange: (t: string) => retryFnRef.current(id, "text", t),
+              onTextCommit: (t: string) => retryFnRef.current(id, "commit", t),
+            }
+          : data;
     setNodes((prev) => [...prev, { id, type, position, data: nodeData }]);
     if (sourceId) {
       setEdges((prev) => [...prev, { id: `e-${sourceId}-${id}`, source: sourceId, target: id }]);
     }
     lastNodeId.current = id;
 
-    insertGenerationTask(conversationId, {
-      id,
-      parentId: sourceId ?? null,
-      type,
-      status: (data.status as GenerationTaskRow["status"]) ?? "completed",
-      label: data.label as string | undefined,
-      prompt: (data.prompt ?? data.text) as string | undefined,
-      ratio: data.ratio as string | undefined,
-      position,
-    }).catch(() => {});
+    insertQueue.current = insertQueue.current.then(() =>
+      insertGenerationTask(conversationId, {
+        id,
+        parentId: sourceId ?? null,
+        type,
+        status: (data.status as GenerationTaskRow["status"]) ?? "completed",
+        label: data.label as string | undefined,
+        prompt: (data.prompt ?? data.text) as string | undefined,
+        ratio: data.ratio as string | undefined,
+        referenceUrls: data.referenceUrls as string[] | undefined,
+        mediaUrl: (data.src ?? data.videoSrc) as string | undefined,
+        position,
+      }).catch(() => {})
+    );
 
     return id;
   };
@@ -216,6 +307,9 @@ export default function ProjectPage() {
     setNodes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
     );
+    if (typeof patch.text === "string") {
+      updateGenerationTask(id, { prompt: patch.text }).catch(() => {});
+    }
     if (patch.status || patch.videoSrc || patch.src) {
       updateGenerationTask(id, {
         status: patch.status as GenerationTaskRow["status"] | undefined,
@@ -228,43 +322,71 @@ export default function ProjectPage() {
   };
 
   const handleFinalPrompt = (text: string) => {
-    addNode("prompt", { label: "Refined prompt", text });
+    const existing = refinedNodeId.current;
+    if (existing) {
+      updateNodeData(existing, { text });
+    } else {
+      refinedNodeId.current = addNode(
+        "prompt",
+        { label: "Refined prompt", text, editable: true },
+        { sourceId: activeRefNode?.id ?? lastNodeId.current }
+      );
+    }
   };
 
   const generateVideoForNode = async (
     nodeId: string,
     prompt: string,
     ratio: Ratio,
-    reference?: { type: "video_url" | "image_url"; url: string; mode?: "extend" | "reference" }
+    reference?: { type: "video_url" | "image_url"; url: string; mode?: "extend" | "reference" },
+    referenceUrls: string[] = [],
+    duration: number | null = null
   ) => {
     const submitRes = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, ratio, reference }),
+      body: JSON.stringify({
+        prompt,
+        ratio,
+        reference,
+        referenceImages: referenceUrls,
+        duration,
+      }),
     }).catch(() => null);
     const submitData = await submitRes?.json().catch(() => null);
 
     if (!submitData?.taskId) {
-      updateNodeData(nodeId, { status: "error" });
+      // Only a reference-image rejection carries a specific reason to show.
+      updateNodeData(nodeId, {
+        status: "error",
+        errorMessage: submitData?.referenceError ? submitData.error : undefined,
+      });
       return;
     }
-    updateNodeData(nodeId, { status: "generating", startedAt: Date.now() });
+    updateNodeData(nodeId, { status: "generating", startedAt: Date.now(), errorMessage: undefined });
     pollVideoTask(submitData.taskId, nodeId);
   };
 
   // Synchronous — Seedream returns the image directly, no submit-then-poll
   // task cycle like video.
-  const generateImageForNode = async (nodeId: string, prompt: string) => {
-    updateNodeData(nodeId, { status: "generating", startedAt: Date.now() });
+  const generateImageForNode = async (
+    nodeId: string,
+    prompt: string,
+    referenceUrls: string[] = []
+  ) => {
+    updateNodeData(nodeId, { status: "generating", startedAt: Date.now(), errorMessage: undefined });
     const res = await fetch("/api/generate-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, referenceImages: referenceUrls }),
     }).catch(() => null);
     const data = await res?.json().catch(() => null);
 
     if (!data?.imageUrl) {
-      updateNodeData(nodeId, { status: "error" });
+      updateNodeData(nodeId, {
+        status: "error",
+        errorMessage: data?.referenceError ? data.error : undefined,
+      });
       return;
     }
     updateNodeData(nodeId, { status: "completed", src: data.imageUrl });
@@ -281,42 +403,198 @@ export default function ProjectPage() {
     const node = nodes.find((n) => n.id === id);
     if (!node) return;
     if (node.type === "image") {
-      generateImageForNode(id, node.data.prompt);
+      generateImageForNode(id, node.data.prompt, node.data.referenceUrls ?? []);
       return;
     }
     if (node.type !== "video") return;
     const lineageEdge = edges.find((e) => e.target === id && e.data?.kind !== "reference");
-    const reference = resolveReference(lineageEdge?.source ?? null);
+    const { reference, urls } = splitReference(
+      resolveReference(lineageEdge?.source ?? null),
+      node.data.referenceUrls ?? []
+    );
     updateNodeData(id, { status: "queued" });
-    generateVideoForNode(id, node.data.prompt, (node.data.ratio ?? "16:9") as Ratio, reference);
+    generateVideoForNode(
+      id,
+      node.data.prompt,
+      (node.data.ratio ?? "16:9") as Ratio,
+      reference,
+      urls,
+      // In-memory only: not persisted, so a retry after a reload uses the model default.
+      node.data.duration ?? null
+    );
   };
   useEffect(() => {
-    retryFnRef.current = handleRetryNode;
+    retryFnRef.current = (id, action = "retry", text = "") => {
+      if (action === "text") {
+        setNodes((prev) => prev.map((n) => (n.id === id ? { ...n, data: { ...n.data, text } } : n)));
+      } else if (action === "commit") {
+        updateGenerationTask(id, { prompt: text }).catch(() => {});
+      } else {
+        handleRetryNode(id);
+      }
+    };
   });
 
-  const handleGenerate = async (prompt: string, ratio: Ratio) => {
-    // A node selected on the canvas takes precedence over the plain chat
-    // chain — matches the same "explicit choice wins" rule used elsewhere.
-    const reference = resolveReference(selectedNodeId ?? lastNodeId.current);
-    const id = addNode("video", { status: "queued", prompt, ratio });
-    generateVideoForNode(id, prompt, ratio, reference);
+  /** The open Refined-prompt node (its text may have been edited) is replaced
+   * by whatever gets generated from it: same place, same parent. */
+  const consumeRefinedNode = () => {
+    const id = refinedNodeId.current;
+    const node = id ? nodes.find((n) => n.id === id) : undefined;
+    if (!id || !node) return null;
+    return {
+      id,
+      text: String(node.data.text ?? "").trim(),
+      parentId: edges.find((e) => e.target === id && e.data?.kind !== "reference")?.source ?? null,
+      position: positions.current.get(id) ?? node.position,
+      carried: [...(referencesByTarget.current.get(id) ?? [])],
+    };
   };
 
-  const handleGenerateImage = async (prompt: string) => {
-    // No image-to-image reference passing yet (Step 8 scope) — text-to-image
-    // only, regardless of what's selected on the canvas.
-    const id = addNode("image", { status: "queued", prompt });
-    generateImageForNode(id, prompt);
+  const removeNodeQuietly = (id: string, parentId: string | null) => {
+    setNodes((prev) => prev.filter((n) => n.id !== id));
+    setEdges((prev) => prev.filter((e) => e.source !== id && e.target !== id));
+    referencesByTarget.current.delete(id);
+    positions.current.delete(id);
+    if (parentId) {
+      childCounts.current.set(parentId, Math.max(0, (childCounts.current.get(parentId) ?? 1) - 1));
+    }
+    if (refinedNodeId.current === id) refinedNodeId.current = null;
+    // Queued behind the node's own insert so a just-created row is really removed.
+    insertQueue.current = insertQueue.current
+      .then(() => deleteGenerationTask(id))
+      .catch(() => {});
   };
 
-  const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : undefined;
-  const canvasContext = selectedNode
-    ? selectedNode.type === "prompt"
-      ? `A "${selectedNode.data.label ?? "prompt"}" node — text: "${selectedNode.data.text}"`
-      : selectedNode.type === "video"
-        ? `A video node — status: ${selectedNode.data.status}, prompt used: "${selectedNode.data.prompt}"`
-        : `An image node — prompt used: "${selectedNode.data.prompt}"`
+  const handleGenerate = async (
+    prompt: string,
+    ratio: Ratio,
+    referenceUrls: string[],
+    duration: number | null
+  ) => {
+    const refined = consumeRefinedNode();
+    setPinnedId(null);
+    const finalPrompt = refined?.text || prompt;
+    // Only an explicitly selected node (shown as a chip in the rail) or a
+    // reference wired into the refined node is used as a visual reference.
+    // A selected image joins the reference images; a selected video is continued.
+    const { reference, urls } = splitReference(
+      resolveReference(activeRefNode?.id ?? null) ??
+        (refined ? resolveReference(refined.id) : undefined),
+      referenceUrls
+    );
+    let sourceId: string | null;
+    let position: { x: number; y: number } | undefined;
+    if (refined) {
+      // Making something "from" a node you picked (chip in the rail) branches
+      // from that node, even when the open refined node hung off another one
+      // (e.g. one left over from an earlier session). Otherwise it takes the
+      // refined node's own place and parent.
+      const picked = activeRefNode && activeRefNode.id !== refined.id ? activeRefNode.id : null;
+      if (picked && picked !== refined.parentId) {
+        sourceId = picked;
+        position = undefined;
+      } else {
+        sourceId = refined.parentId;
+        position = refined.position;
+      }
+      removeNodeQuietly(refined.id, refined.parentId);
+    } else {
+      sourceId = activeRefNode?.id ?? lastNodeId.current;
+    }
+    const id = addNode(
+      "video",
+      { status: "queued", prompt: finalPrompt, ratio, referenceUrls: urls, duration },
+      { sourceId, position }
+    );
+    refined?.carried.forEach((refId) => handleReferenceConnect(refId, id));
+    generateVideoForNode(id, finalPrompt, ratio, reference, urls, duration);
+  };
+
+  const handleGenerateImage = async (prompt: string, referenceUrls: string[]) => {
+    const refined = consumeRefinedNode();
+    setPinnedId(null);
+    const finalPrompt = refined?.text || prompt;
+    // A selected image node is sent to Seedream as a reference image too (a
+    // selected video is not - Seedream only takes images).
+    const selectedRef =
+      resolveReference(activeRefNode?.id ?? null) ??
+      (refined ? resolveReference(refined.id) : undefined);
+    const urls = [
+      ...new Set([...(selectedRef?.type === "image_url" ? [selectedRef.url] : []), ...referenceUrls]),
+    ];
+    let sourceId: string | null;
+    let position: { x: number; y: number } | undefined;
+    if (refined) {
+      // Making something "from" a node you picked (chip in the rail) branches
+      // from that node, even when the open refined node hung off another one
+      // (e.g. one left over from an earlier session). Otherwise it takes the
+      // refined node's own place and parent.
+      const picked = activeRefNode && activeRefNode.id !== refined.id ? activeRefNode.id : null;
+      if (picked && picked !== refined.parentId) {
+        sourceId = picked;
+        position = undefined;
+      } else {
+        sourceId = refined.parentId;
+        position = refined.position;
+      }
+      removeNodeQuietly(refined.id, refined.parentId);
+    } else {
+      sourceId = activeRefNode?.id ?? lastNodeId.current;
+    }
+    const id = addNode(
+      "image",
+      { status: "queued", prompt: finalPrompt, referenceUrls: urls },
+      { sourceId, position }
+    );
+    refined?.carried.forEach((refId) => handleReferenceConnect(refId, id));
+    generateImageForNode(id, finalPrompt, urls);
+  };
+
+  // References attached on the dashboard ride along on the Brief (prompt)
+  // node. Seed them into the rail only while nothing has been generated yet;
+  // once a video/image node exists they've already been used.
+  const hasGenerated = nodes.some((n) => n.type === "video" || n.type === "image");
+  const briefReferences = hasGenerated
+    ? undefined
+    : [...nodes].reverse().find((n) => n.type === "prompt" && n.data.referenceUrls?.length)?.data
+        .referenceUrls;
+
+  const canvasContext = activeRefNode
+    ? activeRefNode.type === "prompt"
+      ? `A "${activeRefNode.data.label ?? "prompt"}" node — text: "${activeRefNode.data.text}"`
+      : activeRefNode.type === "video"
+        ? `A video node — status: ${activeRefNode.data.status}, prompt used: "${activeRefNode.data.prompt}"`
+        : `An image node — prompt used: "${activeRefNode.data.prompt}"`
     : undefined;
+
+  // An image dropped/pasted onto the canvas: a finished image node with no
+  // parent, ready to select (reference chip in the rail) or drag out of.
+  const handleAddImageNode = (url: string, position: { x: number; y: number }) => {
+    addNode(
+      "image",
+      { status: "completed", prompt: "Uploaded image", src: url },
+      { sourceId: null, position }
+    );
+  };
+
+  const handleSelectNode = (id: string | null) => {
+    setSelectedNodeId(id);
+    // A different (or cleared) selection re-arms the chip.
+    setDismissedId((d) => (d === id ? d : null));
+    // Picking another node replaces the pinned reference.
+    if (id && id !== pinnedId) setPinnedId(null);
+  };
+
+  const mediaOf = (n?: Node) =>
+    n?.type === "image" && n.data.src
+      ? { kind: "image" as const, src: n.data.src as string }
+      : n?.type === "video" && n.data.videoSrc
+        ? { kind: "video" as const, src: n.data.videoSrc as string }
+        : undefined;
+  // The chip shows only a selection that hasn't been sent yet; a pinned one
+  // already sits in the chat bubble.
+  const selectedMedia = selectedNode && selectedNode.id !== pinnedId ? mediaOf(selectedNode) : undefined;
+  const pinnedMedia = pinnedId ? mediaOf(nodes.find((n) => n.id === pinnedId)) : undefined;
 
   const handleAddNode = ({
     sourceId,
@@ -324,28 +602,43 @@ export default function ProjectPage() {
     prompt,
     position,
     extraReferenceIds,
+    referenceUrls: pastedUrls,
   }: AddNodeRequest) => {
     if (type === "video") {
       // Prefer a node dragged into the draft as an extra reference over the
       // plain chain source, since that was an explicit choice made while
       // composing this node — fall back through both.
-      let reference: ReturnType<typeof resolveReference>;
+      let found: ReturnType<typeof resolveReference>;
       for (const candidateId of [...extraReferenceIds].reverse().concat(sourceId)) {
-        reference = resolveReference(candidateId);
-        if (reference) break;
+        found = resolveReference(candidateId);
+        if (found) break;
       }
+      const { reference, urls } = splitReference(found, pastedUrls);
 
       const id = addNode(
         "video",
-        { status: "queued", prompt, ratio: "16:9" as Ratio },
+        { status: "queued", prompt, ratio: "16:9" as Ratio, referenceUrls: urls },
         { sourceId, position }
       );
       extraReferenceIds.forEach((refId) => handleReferenceConnect(refId, id));
-      generateVideoForNode(id, prompt, "16:9", reference);
+      generateVideoForNode(id, prompt, "16:9", reference, urls);
     } else if (type === "image") {
-      const id = addNode("image", { status: "queued", prompt }, { sourceId, position });
+      // Dragging out of an image node into a new image: it becomes the reference.
+      const urls: string[] = [...pastedUrls];
+      for (const candidateId of [...extraReferenceIds].reverse().concat(sourceId)) {
+        const r = resolveReference(candidateId);
+        if (r?.type === "image_url") {
+          urls.unshift(r.url);
+          break;
+        }
+      }
+      const id = addNode(
+        "image",
+        { status: "queued", prompt, referenceUrls: urls },
+        { sourceId, position }
+      );
       extraReferenceIds.forEach((refId) => handleReferenceConnect(refId, id));
-      generateImageForNode(id, prompt);
+      generateImageForNode(id, prompt, urls);
     } else if (type === "prompt") {
       // AI-continued prompt ("Ask AI to continue") — lands as a prompt
       // node, same shape as a chat-refined prompt, so it can itself be
@@ -378,7 +671,10 @@ export default function ProjectPage() {
           rawUsage: data.usage,
         }).catch(() => {});
       } else if (data?.status === "error") {
-        updateNodeData(nodeId, { status: "error" });
+        updateNodeData(nodeId, {
+          status: "error",
+          errorMessage: data.referenceError ? data.error : undefined,
+        });
       } else {
         pollVideoTask(taskId, nodeId, attempt + 1);
       }
@@ -400,6 +696,11 @@ export default function ProjectPage() {
         title={title}
         initialMessages={messages}
         canvasContext={canvasContext}
+        initialReferences={briefReferences}
+        selectedMedia={selectedMedia}
+        pinnedMedia={pinnedMedia}
+        onPinSelected={() => setPinnedId(selectedNode?.id ?? null)}
+        onDismissSelected={() => setDismissedId(selectedNodeId)}
         onFinalPrompt={handleFinalPrompt}
         onGenerateRequest={handleGenerate}
         onGenerateImageRequest={handleGenerateImage}
@@ -412,7 +713,8 @@ export default function ProjectPage() {
         onReferenceConnect={handleReferenceConnect}
         onDeleteNode={handleDeleteNode}
         onDisconnectEdge={handleDisconnectEdge}
-        onSelectNode={setSelectedNodeId}
+        onSelectNode={handleSelectNode}
+        onAddImageNode={handleAddImageNode}
       />
     </div>
   );

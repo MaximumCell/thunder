@@ -1,34 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MODELS, QUICK_STARTS } from "@/lib/mock-generations";
 import {
+  ReferenceChips,
+  ReferencePicker,
+  useReferenceImages,
+} from "@/components/project/reference-attachments";
+import {
   createConversation,
+  deleteConversation,
   insertGenerationTask,
   insertMessage,
   insertUsageLog,
   listConversations,
   loadProjectPreview,
   updateGenerationTask,
-  type ConversationRow,
-  type ProjectPreview,
 } from "@/lib/db";
-
-interface ProjectWithPreview extends ConversationRow {
-  preview: ProjectPreview | null;
-}
+import { ProjectCard, type ProjectCardData } from "./project-card";
 
 export function NewProject() {
   const router = useRouter();
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<"video" | "image">("video");
   const [starting, setStarting] = useState(false);
-  const [projects, setProjects] = useState<ProjectWithPreview[] | null>(null);
+  const refs = useReferenceImages();
+  const [startError, setStartError] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectCardData[] | null>(null);
 
   useEffect(() => {
     listConversations()
@@ -43,8 +45,10 @@ export function NewProject() {
 
   const start = async () => {
     const text = input.trim();
-    if (!text || starting) return;
+    if (!text || starting || refs.uploading) return;
     setStarting(true);
+    setStartError(null);
+    const referenceUrls = refs.urls;
 
     try {
       const id = await createConversation(text);
@@ -63,12 +67,13 @@ export function NewProject() {
           type: "image",
           status: "generating",
           prompt: text,
+          referenceUrls,
           position: { x: 0, y: 120 },
         });
         const res = await fetch("/api/generate-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: text }),
+          body: JSON.stringify({ prompt: text, referenceImages: referenceUrls }),
         }).catch(() => null);
         const data = await res?.json().catch(() => null);
         if (data?.imageUrl) {
@@ -80,6 +85,13 @@ export function NewProject() {
             model: data.model ?? "unknown",
             rawUsage: data.usage,
           }).catch(() => {});
+        } else if (data?.referenceError) {
+          // A rejected reference image is explainable — keep the user here
+          // with BytePlus's reason instead of dropping them onto a failed node.
+          await deleteConversation(id).catch(() => {});
+          setStartError(data.error);
+          setStarting(false);
+          return;
         } else {
           await updateGenerationTask(imgId, { status: "error" });
         }
@@ -91,6 +103,8 @@ export function NewProject() {
           status: "completed",
           label: "Brief",
           prompt: text,
+          // Carried into the project's chat rail, which passes them on at Generate.
+          referenceUrls,
           position: { x: 0, y: 120 },
         });
       }
@@ -107,11 +121,19 @@ export function NewProject() {
         Bring your idea to life with Thunder
       </h1>
 
-      <div className="mt-8 rounded-2xl border border-border bg-card p-5 text-left">
+      <div
+        {...refs.dropProps}
+        className={`mt-8 rounded-2xl border bg-card p-5 text-left transition-colors ${
+          refs.dragging ? "border-dashed border-white/40 bg-secondary/60" : "border-border"
+        }`}
+      >
+        <ReferenceChips refs={refs} disabled={starting} />
+        {startError && <p className="mb-2 text-xs text-destructive">{startError}</p>}
         <div className="flex items-end gap-2">
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={refs.onPaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -131,7 +153,7 @@ export function NewProject() {
             size="sm"
             className="size-9 shrink-0 rounded-full p-0"
             onClick={start}
-            disabled={!input.trim() || starting}
+            disabled={!input.trim() || starting || refs.uploading}
           >
             {starting ? (
               <span className="size-3.5 animate-spin rounded-full border-2 border-background/40 border-t-background" />
@@ -139,6 +161,10 @@ export function NewProject() {
               <Send className="size-3.5" />
             )}
           </Button>
+        </div>
+
+        <div className="mt-3">
+          <ReferencePicker refs={refs} disabled={starting} />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-border pt-4">
@@ -221,49 +247,11 @@ export function NewProject() {
           <p className="mb-3 text-sm text-muted-foreground">Your projects</p>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             {projects.map((p) => (
-              <Link
+              <ProjectCard
                 key={p.id}
-                href={`/app/${p.id}`}
-                className="group overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-white/25"
-              >
-                <div className="relative aspect-video w-full overflow-hidden bg-secondary">
-                  {p.preview?.type === "video" ? (
-                    <video
-                      className="size-full object-cover"
-                      src={p.preview.url}
-                      autoPlay
-                      muted
-                      loop
-                      playsInline
-                      preload="auto"
-                    />
-                  ) : p.preview?.type === "image" ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      className="size-full object-cover"
-                      src={p.preview.url}
-                      alt={p.title || "Project preview"}
-                    />
-                  ) : (
-                    <div className="flex size-full items-center justify-center">
-                      <span className="flex size-10 items-center justify-center rounded-lg bg-foreground/10 text-sm font-semibold text-muted-foreground">
-                        {(p.title || "?")[0].toUpperCase()}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                <div className="p-3">
-                  <p className="line-clamp-1 text-sm font-medium">
-                    {p.title || "Untitled"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {new Date(p.created_at).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </p>
-                </div>
-              </Link>
+                project={p}
+                onDeleted={(id) => setProjects((list) => list?.filter((x) => x.id !== id) ?? list)}
+              />
             ))}
           </div>
         </div>

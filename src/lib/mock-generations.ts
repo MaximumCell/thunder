@@ -1,8 +1,9 @@
 export type GenerationStatus = "queued" | "generating" | "completed" | "error";
 
-export type Ratio = "16:9" | "1:1" | "9:16";
+// Seedance's supported values (besides "adaptive"), per the live docs.
+export type Ratio = "21:9" | "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
 
-export const RATIOS: Ratio[] = ["16:9", "1:1", "9:16"];
+export const RATIOS: Ratio[] = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
 
 export const MODELS = [
   {
