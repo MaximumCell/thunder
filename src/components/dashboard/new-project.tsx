@@ -95,7 +95,7 @@ export function NewProject() {
         });
       }
 
-      router.push(`/app/${id}`);
+      router.push(`/app/${id}?mode=${mode}`);
     } catch {
       setStarting(false);
     }

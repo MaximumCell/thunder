@@ -29,6 +29,9 @@ export async function POST(request: Request) {
       ? (body as { canvasContext?: string }).canvasContext
       : undefined;
 
-  const result = await refine(body.messages, canvasContext);
+  const rawMode = (body as { mediaMode?: unknown }).mediaMode;
+  const mediaMode = rawMode === "video" || rawMode === "image" ? rawMode : undefined;
+
+  const result = await refine(body.messages, canvasContext, mediaMode);
   return NextResponse.json(result);
 }

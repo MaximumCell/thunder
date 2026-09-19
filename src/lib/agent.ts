@@ -55,14 +55,19 @@ function toGeminiContents(messages: AgentMessage[]) {
 
 async function callGemma(
   messages: AgentMessage[],
-  canvasContext?: string
+  canvasContext?: string,
+  mediaMode?: MediaType
 ): Promise<AgentResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
-  const systemText = canvasContext
-    ? `${SYSTEM_INSTRUCTION}\n\nCanvas context — the user currently has this node selected on their canvas, and may be referring to it (e.g. asking to continue, build on, or reference it):\n${canvasContext}`
-    : SYSTEM_INSTRUCTION;
+  let systemText = SYSTEM_INSTRUCTION;
+  if (mediaMode) {
+    systemText += `\n\nSELECTED MODE: the user has chosen "${mediaMode}" in the app's Video/Image toggle. This overrides the inference rule above. Set "mediaType" to "${mediaMode}" and NEVER ask whether they want a video or an image — they already told you. Write questions and the finalPrompt for ${mediaMode} only. The single exception: if the user's latest message explicitly asks for the other type ("make an image of…" while in video mode), follow that message and set mediaType to the other type.`;
+  }
+  if (canvasContext) {
+    systemText += `\n\nCanvas context — the user currently has this node selected on their canvas, and may be referring to it (e.g. asking to continue, build on, or reference it):\n${canvasContext}`;
+  }
 
   const res = await fetch(ENDPOINT, {
     method: "POST",
@@ -188,13 +193,14 @@ export async function continuePrompt(
  * message instead of a raw error. */
 export async function refine(
   messages: AgentMessage[],
-  canvasContext?: string
+  canvasContext?: string,
+  mediaMode?: MediaType
 ): Promise<AgentResult> {
   try {
-    return await callGemma(messages, canvasContext);
+    return await callGemma(messages, canvasContext, mediaMode);
   } catch {
     try {
-      return await callGemma(messages, canvasContext);
+      return await callGemma(messages, canvasContext, mediaMode);
     } catch {
       return {
         status: "error",

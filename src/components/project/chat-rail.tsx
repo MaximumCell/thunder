@@ -28,7 +28,11 @@ export function ChatRail({
 }) {
   const [messages, setMessages] = useState<AgentMessage[]>(initialMessages);
   const [finalPrompt, setFinalPrompt] = useState<string | null>(null);
-  const [finalMediaType, setFinalMediaType] = useState<"video" | "image">("video");
+  // The dashboard hands its Video/Image choice over via ?mode=. The rail only
+  // renders after the project loads client-side, so window is always defined.
+  const [mode, setMode] = useState<"video" | "image">(() =>
+    new URLSearchParams(window.location.search).get("mode") === "image" ? "image" : "video"
+  );
   const [input, setInput] = useState("");
   const [ratio, setRatio] = useState<Ratio>("16:9");
   const [busy, setBusy] = useState(false);
@@ -41,7 +45,7 @@ export function ChatRail({
       const res = await fetch("/api/refine", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, canvasContext }),
+        body: JSON.stringify({ messages: next, canvasContext, mediaMode: mode }),
       });
       const result: AgentResult = await res.json();
       setMessages((m) => [...m, { role: "assistant", content: result.reply }]);
@@ -54,7 +58,8 @@ export function ChatRail({
       }).catch(() => {});
       if (result.status === "ready" && result.finalPrompt) {
         setFinalPrompt(result.finalPrompt);
-        setFinalMediaType(result.mediaType);
+        // Only differs from the toggle when the user explicitly asked for the other type.
+        setMode(result.mediaType);
         onFinalPrompt(result.finalPrompt);
       }
     } catch {
@@ -94,7 +99,7 @@ export function ChatRail({
 
   const generate = () => {
     if (!finalPrompt) return;
-    if (finalMediaType === "image") {
+    if (mode === "image") {
       onGenerateImageRequest(finalPrompt);
     } else {
       onGenerateRequest(finalPrompt, ratio);
@@ -125,7 +130,7 @@ export function ChatRail({
       <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
         {messages.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            Describe the video or image you want to make.
+            Describe the {mode} you want to make.
           </p>
         )}
         {messages.map((m, i) => (
@@ -160,7 +165,7 @@ export function ChatRail({
       {finalPrompt && (
         <div className="mx-4 mb-3 flex items-start justify-between gap-3 rounded-lg bg-secondary px-3 py-2">
           <p className="text-xs text-muted-foreground">
-            Ready to generate {finalMediaType === "image" ? "an image" : "a video"} — refine
+            Ready to generate {mode === "image" ? "an image" : "a video"} — refine
             further or generate.
           </p>
           <Button size="sm" className="shrink-0 rounded-full" onClick={generate}>
@@ -170,24 +175,41 @@ export function ChatRail({
       )}
 
       <div className="border-t border-border p-4">
-        {finalMediaType !== "image" && (
-          <div className="mb-2 flex gap-1">
-            {RATIOS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRatio(r)}
-                className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
-                  ratio === r
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="mb-2 flex items-center gap-1">
+          {(["video", "image"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                mode === m
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+          {mode === "video" && (
+            <>
+              <span className="mx-1 h-4 w-px bg-border" />
+              {RATIOS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRatio(r)}
+                  className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                    ratio === r
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
         <div className="flex items-end gap-2">
           <Textarea
             value={input}
@@ -202,7 +224,7 @@ export function ChatRail({
               finalPrompt
                 ? "Ask for a change, or click Generate…"
                 : messages.length === 0
-                  ? "Describe the video or image you want to make..."
+                  ? `Describe the ${mode} you want to make...`
                   : "Reply..."
             }
             rows={2}
